@@ -69,6 +69,8 @@ def should_include_thoughts(model_name):
     """Check if thoughts should be included in the response."""
     if is_thinking_model(model_name):
         return True
+    elif is_maxthinking_model(model_name):
+        return True
     else:
         return False
 
