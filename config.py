@@ -39,6 +39,11 @@ def is_nothinking_model(model_name):
     """Check if model name indicates thinking should be disabled."""
     return "-nothinking" in model_name
 
+# Helper function to check if model uses thinking
+def is_thinking_model(model_name):
+    """Check if model name indicates thinking should be disabled."""
+    return "-thinking" in model_name
+
 # Helper function to check if model uses max thinking
 def is_maxthinking_model(model_name):
     """Check if model name indicates maximum thinking budget should be used."""
@@ -62,13 +67,10 @@ def get_thinking_budget(model_name):
 # Helper function to check if thinking should be included in output
 def should_include_thoughts(model_name):
     """Check if thoughts should be included in the response."""
-    if is_nothinking_model(model_name):
-        # For nothinking mode, still include thoughts if it's a pro model
-        base_model = get_base_model_name(model_name)
-        return "gemini-2.5-pro" in base_model
-    else:
-        # For all other modes, include thoughts
+    if is_thinking_model(model_name):
         return True
+    else:
+        return False
 
 # Dynamic Configuration System - Optimized for memory efficiency
 async def get_config_value(key: str, default: Any = None, env_var: Optional[str] = None) -> Any:
