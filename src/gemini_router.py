@@ -172,7 +172,7 @@ async def generate_content(
         return JSONResponse(content={
             "candidates": [{
                 "content": {
-                    "parts": [{"text": "gcli2api工作中"}],
+                    "parts": [{"text": "工作中"}],
                     "role": "model"
                 },
                 "finishReason": "STOP",
