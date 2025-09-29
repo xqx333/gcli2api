@@ -146,10 +146,11 @@ async def generate_content(
                 generation_config["maxOutputTokens"] = 65535
                 
         # 覆写 top_k 为 64 (在Gemini中叫topK)
-        generation_config["topK"] = 64
+        # generation_config["topK"] = 64
     else:
         # 如果没有generationConfig，创建一个并设置topK
-        request_data["generationConfig"] = {"topK": 64}
+        # request_data["generationConfig"] = {"topK": 64}
+        pass
     
     # 处理模型名称和功能检测
     use_anti_truncation = is_anti_truncation_model(model)
@@ -262,10 +263,11 @@ async def stream_generate_content(
                 generation_config["maxOutputTokens"] = 65535
                 
         # 覆写 top_k 为 64 (在Gemini中叫topK)
-        generation_config["topK"] = 64
+        # generation_config["topK"] = 64
     else:
         # 如果没有generationConfig，创建一个并设置topK
-        request_data["generationConfig"] = {"topK": 64}
+        # request_data["generationConfig"] = {"topK": 64}
+        pass
     
     # 处理模型名称和功能检测
     use_fake_streaming = is_fake_streaming_model(model)
