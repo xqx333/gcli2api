@@ -44,14 +44,17 @@ def is_maxthinking_model(model_name):
     """Check if model name indicates maximum thinking budget should be used."""
     return "-maxthinking" in model_name
 
-# Helper function to get thinking budget for a model
 def get_thinking_budget(model_name):
     """Get the appropriate thinking budget for a model based on its name and variant."""
     
     if is_nothinking_model(model_name):
-        return 128  # Limited thinking for pro
+        if "gemini-2.5-pro" in model_name:
+            return 128  # Minimal thinking for pro
+        return 0  # No thinking for regular models
     elif is_maxthinking_model(model_name):
-        return 32768
+        if "gemini-2.5-pro" in model_name:
+            return 32768  # High thinking budget for pro
+        return 24576
     else:
         # Default thinking budget for regular models
         return -1  # Default for all models
