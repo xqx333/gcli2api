@@ -2562,7 +2562,7 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
 
                 console.log('Fetching creds status...');
 
-                const response = await fetch('/creds/status', {
+                const response = await fetch('/creds/status?include_content=false', {
                     method: 'GET',
                     headers: getAuthHeaders()
                 });
@@ -2968,10 +2968,19 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
 
             // 设置文件内容（避免HTML注入）
             const contentDiv = div.querySelector('.cred-content');
-            if (credInfo.content) {
+            contentDiv.dataset.filename = filename;
+            contentDiv.dataset.contentAvailable = credInfo.content_available === false ? 'false' : 'unknown';
+            if (credInfo.content_loaded && credInfo.content) {
                 contentDiv.textContent = JSON.stringify(credInfo.content, null, 2);
+                contentDiv.dataset.loaded = 'true';
+                contentDiv.dataset.contentAvailable = 'true';
+            } else if (credInfo.content_loaded && credInfo.content_available === false) {
+                contentDiv.textContent = credInfo.error || '凭证数据不存在';
+                contentDiv.dataset.loaded = 'true';
+                contentDiv.dataset.contentAvailable = 'false';
             } else {
-                contentDiv.textContent = credInfo.error || '无法读取文件内容';
+                contentDiv.textContent = credInfo.error || '点击“查看内容”以加载凭证';
+                contentDiv.dataset.loaded = 'false';
             }
 
             // 添加事件监听器到按钮
@@ -3029,11 +3038,76 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
             }
         }
 
-        function toggleCredDetails(pathId) {
+        async function toggleCredDetails(pathId) {
             const detailsId = 'details-' + pathId;
             const details = document.getElementById(detailsId);
-            if (details) {
-                details.classList.toggle('show');
+            if (!details) {
+                return;
+            }
+
+            const willShow = !details.classList.contains('show');
+            details.classList.toggle('show');
+
+            if (!willShow) {
+                return;
+            }
+
+            const contentDiv = details.querySelector('.cred-content');
+            if (!contentDiv) {
+                return;
+            }
+
+            if (contentDiv.dataset.loaded === 'true' || contentDiv.dataset.loading === 'true') {
+                return;
+            }
+
+            if (contentDiv.dataset.contentAvailable === 'false') {
+                contentDiv.dataset.loaded = 'true';
+                return;
+            }
+
+            const filename = contentDiv.dataset.filename;
+            if (!filename) {
+                return;
+            }
+
+            contentDiv.dataset.loading = 'true';
+            contentDiv.textContent = '正在加载凭证内容...';
+
+            try {
+                const response = await fetch(`/creds/content/${encodeURIComponent(filename)}`, {
+                    headers: getAuthHeaders()
+                });
+
+                if (!response.ok) {
+                    let message = `加载失败: HTTP ${response.status}`;
+                    try {
+                        const errorData = await response.json();
+                        if (errorData.detail) {
+                            message = `加载失败: ${errorData.detail}`;
+                        }
+                    } catch (e) {
+                        // ignore JSON parse errors
+                    }
+                    contentDiv.textContent = message;
+                    if (response.status === 404) {
+                        contentDiv.dataset.loaded = 'true';
+                        contentDiv.dataset.contentAvailable = 'false';
+                    } else {
+                        contentDiv.dataset.loaded = 'false';
+                    }
+                    return;
+                }
+
+                const data = await response.json();
+                contentDiv.textContent = JSON.stringify(data.content, null, 2);
+                contentDiv.dataset.loaded = 'true';
+                contentDiv.dataset.contentAvailable = 'true';
+            } catch (error) {
+                contentDiv.textContent = `加载失败: ${error.message}`;
+                contentDiv.dataset.loaded = 'false';
+            } finally {
+                delete contentDiv.dataset.loading;
             }
         }
 

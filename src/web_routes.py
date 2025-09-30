@@ -13,7 +13,7 @@ from collections import deque
 from typing import List, Optional, Dict, Any
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, Depends, File, UploadFile, WebSocket, WebSocketDisconnect, Request
+from fastapi import APIRouter, HTTPException, Depends, File, UploadFile, WebSocket, WebSocketDisconnect, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -630,31 +630,26 @@ async def upload_credentials(files: List[UploadFile] = File(...), token: str = D
 
 
 @router.get("/creds/status")
-async def get_creds_status(token: str = Depends(verify_token)):
+async def get_creds_status(
+    token: str = Depends(verify_token),
+    include_content: bool = Query(False, description="是否在列表响应中返回凭证内容"),
+):
     """获取所有凭证文件的状态"""
     try:
         await ensure_credential_manager_initialized()
-        
-        # 获取存储适配器
+
         storage_adapter = await get_storage_adapter()
-        
-        # 获取所有凭证和状态
         all_credentials = await storage_adapter.list_credentials()
         all_states = await credential_manager.get_creds_status()
-        
-        # 获取后端信息（一次性获取，避免重复查询）
+
         backend_info = await storage_adapter.get_backend_info()
         backend_type = backend_info.get("backend_type", "unknown")
-        
-        # 并发处理所有凭证的数据获取（状态已获取，无需重复处理）
-        async def process_credential_data(filename):
-            """并发处理单个凭证的数据获取"""
+
+        async def process_credential_data(filename: str):
             file_status = all_states.get(filename)
-            
-            # 如果没有状态记录，创建默认状态
+
             if not file_status:
                 try:
-                    import time
                     default_state = {
                         "error_codes": [],
                         "error_details": {},
@@ -665,14 +660,13 @@ async def get_creds_status(token: str = Depends(verify_token)):
                         "total_calls": 0,
                         "next_reset_time": None,
                         "daily_limit_gemini_2_5_pro": 100,
-                        "daily_limit_total": 1000
+                        "daily_limit_total": 1000,
                     }
                     await storage_adapter.update_credential_state(filename, default_state)
                     file_status = default_state
-                    log.debug(f"为凭证 {filename} 创建了默认状态记录")
-                except Exception as e:
-                    log.warning(f"无法为凭证 {filename} 创建状态记录: {e}")
-                    # 创建临时状态用于显示
+                    log.debug(f"为凭证{filename} 创建了默认状态记录")
+                except Exception as err:
+                    log.warning(f"无法为凭证{filename} 创建状态记录: {err}")
                     file_status = {
                         "error_codes": [],
                         "error_details": {},
@@ -683,65 +677,88 @@ async def get_creds_status(token: str = Depends(verify_token)):
                         "total_calls": 0,
                         "next_reset_time": None,
                         "daily_limit_gemini_2_5_pro": 100,
-                        "daily_limit_total": 1000
+                        "daily_limit_total": 1000,
                     }
-            
-            try:
-                # 从存储获取凭证数据
-                credential_data = await storage_adapter.get_credential(filename)
-                if credential_data:
-                    result = {
-                        "status": file_status,
-                        "content": credential_data,
-                        "filename": os.path.basename(filename),
-                        "backend_type": backend_type,  # 复用backend信息
-                        "user_email": file_status.get("user_email")
+
+            response = {
+                "status": file_status,
+                "filename": os.path.basename(filename),
+                "backend_type": backend_type,
+                "user_email": file_status.get("user_email"),
+                "content_loaded": include_content,
+            }
+
+            if backend_type == "file" and os.path.exists(filename):
+                response.update(
+                    {
+                        "size": os.path.getsize(filename),
+                        "modified_time": os.path.getmtime(filename),
                     }
-                    
-                    # 如果是文件模式，添加文件元数据
-                    if backend_type == "file" and os.path.exists(filename):
-                        result.update({
-                            "size": os.path.getsize(filename),
-                            "modified_time": os.path.getmtime(filename)
-                        })
-                    
-                    return filename, result
-                else:
-                    return filename, {
-                        "status": file_status,
-                        "content": None,
-                        "filename": os.path.basename(filename),
-                        "error": "凭证数据不存在"
-                    }
-                    
-            except Exception as e:
-                log.error(f"读取凭证文件失败 {filename}: {e}")
-                return filename, {
-                    "status": file_status,
-                    "content": None,
-                    "filename": os.path.basename(filename),
-                    "error": str(e)
-                }
-        
-        # 并发处理所有凭证数据获取
-        log.debug(f"开始并发获取 {len(all_credentials)} 个凭证数据...")
+                )
+
+            if include_content:
+                credential_data = None
+                try:
+                    credential_data = await storage_adapter.get_credential(filename)
+                except Exception as read_error:
+                    log.error(f"读取凭证文件失败 {filename}: {read_error}")
+                    response["error"] = str(read_error)
+
+                response["content"] = credential_data
+                response["content_available"] = credential_data is not None
+                if credential_data is None and "error" not in response:
+                    response["error"] = "凭证数据不存在"
+            else:
+                response["content"] = None
+                response["content_available"] = None
+
+            return filename, response
+
+        log.debug(f"开始并发获取{len(all_credentials)} 个凭证状态...")
         concurrent_tasks = [process_credential_data(filename) for filename in all_credentials]
         results = await asyncio.gather(*concurrent_tasks, return_exceptions=True)
-        
-        # 组装结果
+
         creds_info = {}
         for result in results:
             if isinstance(result, Exception):
                 log.error(f"处理凭证状态异常: {result}")
-            else:
-                filename, credential_info = result
-                creds_info[filename] = credential_info
-        
+                continue
+            filename, credential_info = result
+            creds_info[filename] = credential_info
+
         return JSONResponse(content={"creds": creds_info})
-        
-    except Exception as e:
-        log.error(f"获取凭证状态失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+
+    except Exception as exc:
+        log.error(f"获取凭证状态失败: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/creds/content/{filename}")
+async def get_credential_content(filename: str, token: str = Depends(verify_token)):
+    """获取单个凭证的内容"""
+    try:
+        if not filename:
+            raise HTTPException(status_code=400, detail="文件名不能为空")
+
+        safe_filename = os.path.basename(filename)
+        if not safe_filename.endswith('.json'):
+            raise HTTPException(status_code=400, detail="无效的文件名")
+
+        storage_adapter = await get_storage_adapter()
+        credential_data = await storage_adapter.get_credential(safe_filename)
+        if credential_data is None:
+            raise HTTPException(status_code=404, detail="凭证数据不存在")
+
+        return JSONResponse(content={
+            "filename": safe_filename,
+            "content": credential_data
+        })
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error(f"获取凭证内容失败 {filename}: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.post("/creds/action")
