@@ -456,6 +456,20 @@
             outline: none;
         }
 
+        .search-input {
+            padding: 8px 12px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            min-width: 220px;
+        }
+
+        .search-input:focus {
+            border-color: #4285f4;
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.2);
+        }
+
         .pagination-container {
             display: flex;
             justify-content: center;
@@ -1213,6 +1227,8 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
 
                 <!-- 筛选和分页控件 -->
                 <div class="filter-container">
+                    <label for="emailSearchInput">邮箱搜索：</label>
+                    <input type="text" id="emailSearchInput" class="search-input" placeholder="输入邮箱或文件名" oninput="handleEmailSearch()" />
                     <label for="statusFilter">状态筛选：</label>
                     <select id="statusFilter" class="filter-select" onchange="applyFilters()">
                         <option value="all">全部</option>
@@ -1287,6 +1303,11 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                 </div>
 
                 <!-- 文件使用统计列表 -->
+                <div class="filter-container">
+                    <label for="usageSearchInput">名称搜索：</label>
+                    <input type="text" id="usageSearchInput" class="search-input" placeholder="输入文件名" oninput="handleUsageSearch()" />
+                </div>
+
                 <div id="usageListSection">
                     <div class="loading" id="usageLoading">正在加载使用统计...</div>
                     <div id="usageList"></div>
@@ -1720,6 +1741,7 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
         let pageSize = 20;
         let currentFilter = 'all';
         let currentErrorCodeFilter = 'all';
+        let currentEmailSearch = '';
         let selectedCredFiles = new Set(); // 选中的凭证文件名集合
         let availableErrorCodes = new Set(); // 所有可用的错误码
         let statsData = {
@@ -2484,12 +2506,20 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
             document.getElementById('statDisabled').textContent = statsData.disabled;
         }
 
+        function handleEmailSearch() {
+            currentPage = 1;
+            applyFilters();
+        }
+
         // 应用筛选
         function applyFilters() {
             const statusFilter = document.getElementById('statusFilter').value;
             const errorCodeFilter = document.getElementById('errorCodeFilter').value;
+            const emailSearchInput = document.getElementById('emailSearchInput');
+            const emailSearchQuery = emailSearchInput ? emailSearchInput.value.trim().toLowerCase() : '';
             currentFilter = statusFilter;
             currentErrorCodeFilter = errorCodeFilter;
+            currentEmailSearch = emailSearchQuery;
             filteredCredsData = {};
 
             for (const [fullPath, credInfo] of Object.entries(credsData)) {
@@ -2532,6 +2562,18 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                             shouldInclude = errorCodes.includes(targetCode);
                         }
                         break;
+                }
+
+                if (shouldInclude && emailSearchQuery) {
+                    const candidates = [
+                        credInfo.user_email,
+                        credInfo.filename,
+                        credInfo.status && credInfo.status.user_email,
+                        credInfo.status && credInfo.status.email
+                    ];
+                    shouldInclude = candidates.some(value =>
+                        typeof value === 'string' && value.toLowerCase().includes(emailSearchQuery)
+                    );
                 }
 
                 if (shouldInclude) {
@@ -3493,6 +3535,7 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
 
         let usageStatsData = {};
         let currentEditingFile = '';
+        let usageSearchQuery = '';
 
         // 刷新使用统计
         async function refreshUsageStats() {
@@ -3541,17 +3584,32 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
             }
         }
 
+        function handleUsageSearch() {
+            const input = document.getElementById('usageSearchInput');
+            usageSearchQuery = input ? input.value.trim().toLowerCase() : '';
+            renderUsageList();
+        }
+
         // 渲染使用统计列表
         function renderUsageList() {
             const usageList = document.getElementById('usageList');
             usageList.innerHTML = '';
 
-            if (Object.keys(usageStatsData).length === 0) {
-                usageList.innerHTML = '<p style="text-align: center; color: #666;">暂无使用统计数据</p>';
+            const entries = Object.entries(usageStatsData).filter(([filename]) => {
+                if (!usageSearchQuery) {
+                    return true;
+                }
+                return filename.toLowerCase().includes(usageSearchQuery);
+            });
+
+            if (entries.length === 0) {
+                const hasData = Object.keys(usageStatsData).length > 0;
+                const message = hasData ? '当前搜索条件下暂无数据' : '暂无使用统计数据';
+                usageList.innerHTML = `<p style="text-align: center; color: #666;">${message}</p>`;
                 return;
             }
 
-            for (const [filename, stats] of Object.entries(usageStatsData)) {
+            for (const [filename, stats] of entries) {
                 const card = createUsageCard(filename, stats);
                 usageList.appendChild(card);
             }
