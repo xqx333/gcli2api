@@ -168,26 +168,47 @@ class UnifiedCacheManager:
                 return False
     
     async def get_all(self) -> Dict[str, Any]:
-        """获取所有缓存数据"""
+        """Return a shallow copy so callers do not mutate the cache."""
         async with self._cache_lock:
             start_time = time.time()
-            
+
             try:
-                # 确保缓存已加载
                 await self._ensure_cache_loaded()
-                
-                # 性能监控
+
                 self._operation_count += 1
                 operation_time = time.time() - start_time
                 self._operation_times.append(operation_time)
-                
-                log.debug(f"{self._name} cache get_all ({len(self._cache)}) in {operation_time:.3f}s")
-                return self._cache.copy()
-                
+
+                cache_copy = self._cache.copy()
+                log.debug(f"{self._name} cache get_all ({len(cache_copy)}) in {operation_time:.3f}s")
+                return cache_copy
+
             except Exception as e:
                 operation_time = time.time() - start_time
                 log.error(f"Error getting all {self._name} cache in {operation_time:.3f}s: {e}")
                 return {}
+
+    async def list_keys(self) -> List[str]:
+        """Return a list of keys currently stored in the cache."""
+        async with self._cache_lock:
+            start_time = time.time()
+
+            try:
+                await self._ensure_cache_loaded()
+
+                keys = list(self._cache.keys())
+
+                self._operation_count += 1
+                operation_time = time.time() - start_time
+                self._operation_times.append(operation_time)
+
+                log.debug(f"{self._name} cache keys ({len(keys)}) in {operation_time:.3f}s")
+                return keys
+
+            except Exception as e:
+                operation_time = time.time() - start_time
+                log.error(f"Error getting keys from {self._name} cache in {operation_time:.3f}s: {e}")
+                return []
     
     async def update_multi(self, updates: Dict[str, Any]) -> bool:
         """批量更新缓存项"""
@@ -254,50 +275,72 @@ class UnifiedCacheManager:
         """异步写回循环"""
         while not self._shutdown_event.is_set():
             try:
-                # 等待写入延迟或关闭信号
                 try:
                     await asyncio.wait_for(self._shutdown_event.wait(), timeout=self._write_delay)
-                    break  # 收到关闭信号
+                    break
                 except asyncio.TimeoutError:
-                    pass  # 超时，检查是否需要写回
-                
-                # 如果缓存脏了，写回底层存储
-                async with self._cache_lock:
-                    if self._cache_dirty:
-                        await self._write_cache()
-                
+                    pass
+
+                snapshot = await self._capture_snapshot()
+                if snapshot is None:
+                    continue
+
+                data, item_count = snapshot
+                success = await self._write_snapshot(data, item_count)
+                if not success:
+                    await self._mark_dirty()
+
             except Exception as e:
                 log.error(f"Error in {self._name} cache writer loop: {e}")
                 await asyncio.sleep(1)
-    
-    async def _write_cache(self):
-        """将缓存写回底层存储"""
-        if not self._cache_dirty:
-            return
-        
+
+    async def _capture_snapshot(self) -> Optional[Tuple[Dict[str, Any], int]]:
+        """Capture a snapshot of the cache while holding the lock."""
+        async with self._cache_lock:
+            if not self._cache_dirty:
+                return None
+
+            snapshot = self._cache.copy()
+            item_count = len(snapshot)
+            self._cache_dirty = False
+            return snapshot, item_count
+
+    async def _write_snapshot(self, snapshot: Dict[str, Any], item_count: int) -> bool:
+        """Persist a previously captured snapshot to the backend."""
+        start_time = time.time()
+
         try:
-            start_time = time.time()
-            
-            # 写入后端
-            success = await self._backend.write_data(self._cache.copy())
-            
+            success = await self._backend.write_data(snapshot)
             if success:
-                self._cache_dirty = False
                 operation_time = time.time() - start_time
-                log.debug(f"{self._name} cache written to backend in {operation_time:.3f}s ({len(self._cache)} items)")
-            else:
-                log.error(f"Failed to write {self._name} cache to backend")
-            
+                log.debug(f"{self._name} cache written to backend in {operation_time:.3f}s ({item_count} items)")
+                return True
+
+            log.error(f"Failed to write {self._name} cache to backend")
+            return False
+
         except Exception as e:
             log.error(f"Error writing {self._name} cache to backend: {e}")
-    
-    async def _flush_cache(self):
-        """立即刷新缓存到底层存储"""
+            return False
+
+    async def _mark_dirty(self):
+        """Mark the cache as dirty so the writer retries."""
         async with self._cache_lock:
-            if self._cache_dirty:
-                await self._write_cache()
-                log.debug(f"{self._name} cache flushed to backend")
-    
+            self._cache_dirty = True
+
+    async def _flush_cache(self):
+        """Flush any pending cache changes to the backend immediately."""
+        snapshot = await self._capture_snapshot()
+        if snapshot is None:
+            return
+
+        data, item_count = snapshot
+        success = await self._write_snapshot(data, item_count)
+        if success:
+            log.debug(f"{self._name} cache flushed to backend")
+        else:
+            await self._mark_dirty()
+
     def get_stats(self) -> Dict[str, Any]:
         """获取缓存统计信息"""
         avg_time = sum(self._operation_times) / len(self._operation_times) if self._operation_times else 0

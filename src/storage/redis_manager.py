@@ -358,17 +358,15 @@ class RedisManager:
         start_time = time.time()
         
         try:
-            all_data = await self._credentials_cache_manager.get_all()
-            filenames = list(all_data.keys())
-            
-            # 性能监控
+            filenames = await self._credentials_cache_manager.list_keys()
+
             self._operation_count += 1
             operation_time = time.time() - start_time
             self._operation_times.append(operation_time)
-            
+
             log.debug(f"Listed {len(filenames)} credentials from unified cache in {operation_time:.3f}s")
             return filenames
-            
+
         except Exception as e:
             operation_time = time.time() - start_time
             log.error(f"Error listing credentials in {operation_time:.3f}s: {e}")

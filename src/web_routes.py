@@ -876,6 +876,7 @@ async def disable_429_chat_credentials(token: str = Depends(verify_token)):
         storage_adapter = await get_storage_adapter()
 
         all_credentials = await storage_adapter.list_credentials()
+        all_states = await storage_adapter.get_all_credential_states()
         disabled_files = []
         errors = []
 
@@ -894,7 +895,9 @@ async def disable_429_chat_credentials(token: str = Depends(verify_token)):
 
         for filename in all_credentials:
             try:
-                state = await storage_adapter.get_credential_state(filename)
+                state = (all_states.get(filename)
+                         or all_states.get(os.path.basename(filename))
+                         or {})
                 if not state:
                     continue
 
