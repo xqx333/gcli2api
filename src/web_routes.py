@@ -818,6 +818,54 @@ async def clear_credential_errors(token: str = Depends(verify_token)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+@router.post("/creds/delete-missing-data")
+async def delete_credentials_with_missing_data(token: str = Depends(verify_token)):
+    """Delete credential records where the credential payload is missing."""
+    try:
+        await ensure_credential_manager_initialized()
+        storage_adapter = await get_storage_adapter()
+
+        all_credentials = await storage_adapter.list_credentials()
+        deleted_files = []
+        failed_files = []
+
+        for filename in all_credentials:
+            try:
+                credential_data = await storage_adapter.get_credential(filename)
+
+                if credential_data:
+                    continue
+
+                delete_success = await storage_adapter.delete_credential(filename)
+                if delete_success:
+                    deleted_files.append(filename)
+                    log.info(f"Deleted credential with missing data: {filename}")
+                else:
+                    failed_files.append({"filename": filename, "error": "delete_failed"})
+            except Exception as inner_exc:
+                log.error(f"Failed to delete missing credential {filename}: {inner_exc}")
+                failed_files.append({"filename": filename, "error": str(inner_exc)})
+
+        total_deleted = len(deleted_files)
+        total_failed = len(failed_files)
+        message = f"Cleanup complete: deleted {total_deleted} credential(s)"
+        if total_failed:
+            message += f", failed {total_failed}"
+
+        return JSONResponse(content={
+            "success": True,
+            "deleted": deleted_files,
+            "failed": failed_files,
+            "total_scanned": len(all_credentials),
+            "total_deleted": total_deleted,
+            "message": message
+        })
+
+    except Exception as exc:
+        log.error(f"Cleanup missing credential data failed: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
 @router.post("/creds/batch-action")
 async def creds_batch_action(request: CredFileBatchActionRequest, token: str = Depends(verify_token)):
     """批量对凭证文件执行操作（启用/禁用/删除）"""

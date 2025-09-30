@@ -623,6 +623,10 @@
             color: white;
         }
 
+        .batch-btn.batch-clean-missing {
+            background-color: #ff5722;
+            color: white;
+        }
 
         .batch-btn:disabled {
             background-color: #e9ecef;
@@ -1277,6 +1281,7 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                         <button class="batch-btn batch-429-disable" onclick="bulkToggle429('disable')">禁用所有429</button>
                         <button class="batch-btn batch-429-enable" onclick="bulkToggle429('enable')">启用所有429</button>
                         <button class="batch-btn batch-clear" onclick="clearErrorsAndStats()">清空错误状态</button>
+                        <button class="batch-btn batch-clean-missing" onclick="deleteMissingCredentialData()">清除空凭证</button>
                     </div>
                 </div>
 
@@ -3575,6 +3580,35 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
 
 
         // 邮箱相关函数
+
+        async function deleteMissingCredentialData() {
+            if (!confirm('确定要删除所有凭证数据为空的文件吗？此操作不可恢复！')) {
+                return;
+            }
+
+            try {
+                showStatus('正在清理无凭证数据的文件...', 'info');
+
+                const response = await fetch('/creds/delete-missing-data', {
+                    method: 'POST',
+                    headers: getAuthHeaders()
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    const message = data.message || `已删除 ${data.total_deleted || 0} 个凭证`;
+                    showStatus(message, 'success');
+                    await refreshCredsStatus();
+                } else {
+                    showStatus(`清理失败: ${data.detail || data.error || '未知错误'}`, 'error');
+                }
+            } catch (error) {
+                console.error('deleteMissingCredentialData error:', error);
+                showStatus(`网络错误: ${error.message}`, 'error');
+            }
+        }
+
         async function fetchUserEmail(filename) {
             try {
                 showStatus('正在获取用户邮箱...', 'info');
