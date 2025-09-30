@@ -618,6 +618,11 @@
             color: white;
         }
 
+        .batch-btn.batch-clear {
+            background-color: #6f42c1;
+            color: white;
+        }
+
 
         .batch-btn:disabled {
             background-color: #e9ecef;
@@ -1271,6 +1276,7 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                         <button class="batch-btn batch-email" onclick="refreshAllEmails()">刷新所有邮箱</button>
                         <button class="batch-btn batch-429-disable" onclick="bulkToggle429('disable')">禁用所有429</button>
                         <button class="batch-btn batch-429-enable" onclick="bulkToggle429('enable')">启用所有429</button>
+                        <button class="batch-btn batch-clear" onclick="clearErrorsAndStats()">清空错误状态</button>
                     </div>
                 </div>
 
@@ -3538,6 +3544,35 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                 showStatus(`操作网络错误: ${error.message}`, 'error');
             }
         }
+
+        async function clearErrorsAndStats() {
+            if (!confirm('确定要清空所有错误状态吗？')) {
+                return;
+            }
+
+            try {
+                showStatus('正在清空错误状态...', 'info');
+                const response = await fetch('/creds/clear-errors', {
+                    method: 'POST',
+                    headers: getAuthHeaders()
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showStatus(data.message || '已清空错误状态', 'success');
+                    await refreshCredsStatus();
+                    if (typeof refreshUsageStats === 'function') {
+                        await refreshUsageStats();
+                    }
+                } else {
+                    showStatus(`操作失败: ${data.detail || data.error || data.message || '未知错误'}`, 'error');
+                }
+            } catch (error) {
+                showStatus(`操作网络错误: ${error.message}`, 'error');
+            }
+        }
+
 
         // 邮箱相关函数
         async function fetchUserEmail(filename) {

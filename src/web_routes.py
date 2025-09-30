@@ -806,6 +806,18 @@ async def creds_action(request: CredFileActionRequest, token: str = Depends(veri
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/creds/clear-errors")
+async def clear_credential_errors(token: str = Depends(verify_token)):
+    """Clear error codes and details for all credentials."""
+    try:
+        await ensure_credential_manager_initialized()
+        result = await credential_manager.clear_all_errors_and_stats()
+        return {"message": f"成功清空 {result['states']} 个凭证异常"}
+    except Exception as e:
+        log.error(f"Clear credential errors failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/creds/batch-action")
 async def creds_batch_action(request: CredFileBatchActionRequest, token: str = Depends(verify_token)):
     """批量对凭证文件执行操作（启用/禁用/删除）"""

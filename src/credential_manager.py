@@ -411,6 +411,22 @@ class CredentialManager:
             log.error(f"Error fetching user email for {credential_name}: {e}")
             return None
     
+    async def clear_all_errors_and_stats(self) -> Dict[str, int]:
+        """Clear error codes/details for all credentials."""
+        if not self._initialized:
+            await self.initialize()
+
+        cleared_states = 0
+
+        all_states = await self._storage_adapter.get_all_credential_states()
+        for filename in all_states.keys():
+            success = await self._storage_adapter.update_credential_state(filename, {"error_codes": [], "error_details": {}})
+            if success:
+                cleared_states += 1
+
+        log.info(f"Cleared errors for {cleared_states} credentials")
+        return {"states": cleared_states}
+
     async def record_api_call_result(self, credential_name: str, success: bool, error_code: Optional[int] = None, error_message: Optional[str] = None):
         """记录API调用结果"""
         try:
