@@ -478,20 +478,26 @@ class FileStorageManager:
             filename = self._normalize_filename(filename)
             all_data = await self._credentials_cache_manager.get_all()
             
-            if filename not in all_data:
-                all_data[filename] = self.get_default_state()
+            entry = all_data.get(filename)
+            if not entry:
+                log.debug(f"Skip usage stats update for missing credential: {filename}")
+                return True
+
+            has_credential_data = any(key not in self.STATE_FIELDS for key in entry.keys())
+            if not has_credential_data:
+                log.debug(f"Skip usage stats update for credential without data: {filename}")
+                return True
             
             # 更新统计数据
-            all_data[filename].update(stats_updates)
+            entry.update(stats_updates)
             
-            success = await self._credentials_cache_manager.update_multi({filename: all_data[filename]})
+            success = await self._credentials_cache_manager.update_multi({filename: entry})
             log.debug(f"Updated usage stats in unified cache: {filename}")
             return success
             
         except Exception as e:
             log.error(f"Error updating usage stats {filename}: {e}")
             return False
-    
     async def get_usage_stats(self, filename: str) -> Dict[str, Any]:
         """从统一缓存获取使用统计"""
         self._ensure_initialized()

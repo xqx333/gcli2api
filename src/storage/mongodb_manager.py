@@ -421,39 +421,49 @@ class MongoDBManager:
     # ============ 使用统计管理 ============
     
     async def update_usage_stats(self, filename: str, stats_updates: Dict[str, Any]) -> bool:
-        """更新使用统计（使用统一缓存）"""
+        """更新使用统计"""
         self._ensure_initialized()
         start_time = time.time()
         
         try:
-            # 获取现有数据或创建新数据
-            existing_data = await self._credentials_cache_manager.get(filename, {})
-            
-            if not existing_data:
-                existing_data = {
-                    "credential": {},
-                    "state": self._get_default_state(),
-                    "stats": self._get_default_stats()
-                }
-            
-            # 更新统计数据
-            existing_data["stats"].update(stats_updates)
-            
+            existing_data = await self._credentials_cache_manager.get(filename)
+            if not isinstance(existing_data, dict) or not existing_data:
+                operation_time = time.time() - start_time
+                log.debug(f"Skip usage stats update for missing credential: {filename}")
+                self._operation_count += 1
+                self._operation_times.append(operation_time)
+                return True
+        
+            credential_section = existing_data.get('credential') if isinstance(existing_data.get('credential'), dict) else None
+            has_credential = bool(credential_section)
+            if not has_credential:
+                for key in existing_data.keys():
+                    if key not in ('credential', 'state', 'stats') and key not in self.STATE_FIELDS and key not in self.STATS_FIELDS:
+                        has_credential = True
+                        break
+            if not has_credential:
+                operation_time = time.time() - start_time
+                log.debug(f"Skip usage stats update for credential without data: {filename}")
+                self._operation_count += 1
+                self._operation_times.append(operation_time)
+                return True
+        
+            existing_data.setdefault('stats', self._get_default_stats())
+            existing_data['stats'].update(stats_updates)
+        
             success = await self._credentials_cache_manager.set(filename, existing_data)
-            
-            # 性能监控
+        
             self._operation_count += 1
             operation_time = time.time() - start_time
             self._operation_times.append(operation_time)
-            
+        
             log.debug(f"Updated usage stats in unified cache: {filename} in {operation_time:.3f}s")
             return success
-                
+        
         except Exception as e:
             operation_time = time.time() - start_time
             log.error(f"Error updating usage stats {filename} in {operation_time:.3f}s: {e}")
             return False
-    
     async def get_usage_stats(self, filename: str) -> Dict[str, Any]:
         """从统一缓存获取使用统计"""
         self._ensure_initialized()
