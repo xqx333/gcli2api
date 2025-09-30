@@ -618,6 +618,11 @@
             color: white;
         }
 
+        .batch-btn.batch-429-chat-disable {
+            background-color: #ff9800;
+            color: white;
+        }
+
         .batch-btn.batch-clear {
             background-color: #6f42c1;
             color: white;
@@ -1279,6 +1284,7 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                             disabled>批量删除</button>
                         <button class="batch-btn batch-email" onclick="refreshAllEmails()">刷新所有邮箱</button>
                         <button class="batch-btn batch-429-disable" onclick="bulkToggle429('disable')">禁用所有429</button>
+                        <button class="batch-btn batch-429-chat-disable" onclick="disableChat429Credentials()">禁用Chat API 429</button>
                         <button class="batch-btn batch-429-enable" onclick="bulkToggle429('enable')">启用所有429</button>
                         <button class="batch-btn batch-clear" onclick="clearErrorsAndStats()">清空错误状态</button>
                         <button class="batch-btn batch-clean-missing" onclick="deleteMissingCredentialData()">清除空凭证</button>
@@ -3605,6 +3611,36 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                 }
             } catch (error) {
                 console.error('deleteMissingCredentialData error:', error);
+                showStatus(`网络错误: ${error.message}`, 'error');
+            }
+        }
+
+        
+
+        async function disableChat429Credentials() {
+            if (!confirm('确定要禁用所有出现429且包含 Chat API requests 错误的凭证吗？')) {
+                return;
+            }
+
+            try {
+                showStatus('正在禁用相关凭证...', 'info');
+
+                const response = await fetch('/creds/disable-429-chat', {
+                    method: 'POST',
+                    headers: getAuthHeaders()
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    const message = data.message || `已禁用 ${data.total_disabled || 0} 个凭证`;
+                    showStatus(message, 'success');
+                    await refreshCredsStatus();
+                } else {
+                    showStatus(`禁用失败: ${data.detail || data.error || '未知错误'}`, 'error');
+                }
+            } catch (error) {
+                console.error('disableChat429Credentials error:', error);
                 showStatus(`网络错误: ${error.message}`, 'error');
             }
         }

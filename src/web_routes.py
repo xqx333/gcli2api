@@ -866,6 +866,85 @@ async def delete_credentials_with_missing_data(token: str = Depends(verify_token
         log.error(f"Cleanup missing credential data failed: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
 
+
+
+@router.post("/creds/disable-429-chat")
+async def disable_429_chat_credentials(token: str = Depends(verify_token)):
+    """Disable credentials that have 429 errors mentioning Chat API requests."""
+    try:
+        await ensure_credential_manager_initialized()
+        storage_adapter = await get_storage_adapter()
+
+        all_credentials = await storage_adapter.list_credentials()
+        disabled_files = []
+        errors = []
+
+        def _extract_messages(detail):
+            if isinstance(detail, dict):
+                message = detail.get("message")
+                return [message] if isinstance(message, str) else []
+            if isinstance(detail, list):
+                messages = []
+                for item in detail:
+                    messages.extend(_extract_messages(item))
+                return messages
+            if isinstance(detail, str):
+                return [detail]
+            return []
+
+        for filename in all_credentials:
+            try:
+                state = await storage_adapter.get_credential_state(filename)
+                if not state:
+                    continue
+
+                error_codes = state.get("error_codes") or []
+                if 429 not in error_codes:
+                    continue
+
+                error_details = state.get("error_details") or {}
+                detail_entry = error_details.get("429")
+                if detail_entry is None and 429 in error_details:
+                    detail_entry = error_details.get(429)
+
+                messages = _extract_messages(detail_entry) if detail_entry is not None else []
+                if not messages:
+                    continue
+
+                if not any("chat api requests" in msg.lower() for msg in messages if isinstance(msg, str)):
+                    continue
+
+                already_disabled = bool(state.get("disabled"))
+                success = await credential_manager.set_cred_disabled(filename, True)
+                if success:
+                    disabled_files.append({
+                        "filename": filename,
+                        "was_disabled": already_disabled
+                    })
+                else:
+                    errors.append({"filename": filename, "error": "disable_failed"})
+
+            except Exception as inner_exc:
+                log.error(f"Disable 429 chat credential failed {filename}: {inner_exc}")
+                errors.append({"filename": filename, "error": str(inner_exc)})
+
+        message = f"Processed {len(all_credentials)} credential(s); disabled {len(disabled_files)}"
+        if errors:
+            message += f", failed {len(errors)}"
+
+        return JSONResponse(content={
+            "success": True,
+            "disabled": disabled_files,
+            "errors": errors,
+            "total_scanned": len(all_credentials),
+            "total_disabled": len(disabled_files),
+            "message": message
+        })
+
+    except Exception as exc:
+        log.error(f"Disable 429 chat credentials failed: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
 @router.post("/creds/batch-action")
 async def creds_batch_action(request: CredFileBatchActionRequest, token: str = Depends(verify_token)):
     """批量对凭证文件执行操作（启用/禁用/删除）"""
