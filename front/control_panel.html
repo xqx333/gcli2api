@@ -470,6 +470,28 @@
             box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.2);
         }
 
+        .filter-toggle-btn {
+            padding: 6px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #fff;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .filter-toggle-btn.active {
+            background-color: #4285f4;
+            border-color: #4285f4;
+            color: #fff;
+        }
+
+        .filter-toggle-btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+            background-color: #f5f5f5;
+        }
+
         .pagination-container {
             display: flex;
             justify-content: center;
@@ -586,6 +608,16 @@
             background-color: #17a2b8;
             color: white;
         }
+        .batch-btn.batch-429-disable {
+            background-color: #ff8c00;
+            color: white;
+        }
+
+        .batch-btn.batch-429-enable {
+            background-color: #20c997;
+            color: white;
+        }
+
 
         .batch-btn:disabled {
             background-color: #e9ecef;
@@ -1222,6 +1254,8 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                         <button class="batch-btn batch-delete" id="batchDeleteBtn" onclick="batchAction('delete')"
                             disabled>批量删除</button>
                         <button class="batch-btn batch-email" onclick="refreshAllEmails()">刷新所有邮箱</button>
+                        <button class="batch-btn batch-429-disable" onclick="bulkToggle429('disable')">禁用所有429</button>
+                        <button class="batch-btn batch-429-enable" onclick="bulkToggle429('enable')">启用所有429</button>
                     </div>
                 </div>
 
@@ -1229,6 +1263,7 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                 <div class="filter-container">
                     <label for="emailSearchInput">邮箱搜索：</label>
                     <input type="text" id="emailSearchInput" class="search-input" placeholder="输入邮箱或文件名" oninput="handleEmailSearch()" />
+                    <button type="button" id="duplicateEmailToggle" class="filter-toggle-btn" onclick="toggleDuplicateEmailFilter()" title="只显示邮箱重复的凭证">只看重复邮箱</button>
                     <label for="statusFilter">状态筛选：</label>
                     <select id="statusFilter" class="filter-select" onchange="applyFilters()">
                         <option value="all">全部</option>
@@ -1742,6 +1777,8 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
         let currentFilter = 'all';
         let currentErrorCodeFilter = 'all';
         let currentEmailSearch = '';
+        let showDuplicateEmails = false;
+        let duplicateEmailSet = new Set();
         let selectedCredFiles = new Set(); // 选中的凭证文件名集合
         let availableErrorCodes = new Set(); // 所有可用的错误码
         let statsData = {
@@ -1759,6 +1796,66 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                 console.error('statusSection not found');
                 alert(message); // 临时回退方案
             }
+        }
+
+        function collectEmailCandidates(credInfo) {
+            const candidates = [];
+            if (!credInfo) {
+                return candidates;
+            }
+
+            if (typeof credInfo.user_email === 'string') {
+                const value = credInfo.user_email.trim();
+                if (value) {
+                    candidates.push(value);
+                }
+            }
+
+            if (credInfo.status && typeof credInfo.status.user_email === 'string') {
+                const value = credInfo.status.user_email.trim();
+                if (value) {
+                    candidates.push(value);
+                }
+            }
+
+            if (credInfo.status && typeof credInfo.status.email === 'string') {
+                const value = credInfo.status.email.trim();
+                if (value) {
+                    candidates.push(value);
+                }
+            }
+
+            return candidates;
+        }
+
+        function getNormalizedEmail(credInfo) {
+            const candidates = collectEmailCandidates(credInfo);
+            if (candidates.length === 0) {
+                return '';
+            }
+            return candidates[0].toLowerCase();
+        }
+
+        function updateDuplicateEmailButton(duplicateCredentialCount) {
+            const toggleBtn = document.getElementById('duplicateEmailToggle');
+            if (!toggleBtn) {
+                return;
+            }
+            const hasDuplicates = duplicateCredentialCount > 0;
+            toggleBtn.disabled = !hasDuplicates;
+            const suffix = hasDuplicates ? ` (${duplicateCredentialCount})` : '';
+            toggleBtn.textContent = showDuplicateEmails ? `显示全部邮箱${suffix}` : `只看重复邮箱${suffix}`;
+            toggleBtn.classList.toggle('active', showDuplicateEmails);
+        }
+
+        function toggleDuplicateEmailFilter() {
+            if (!duplicateEmailSet || duplicateEmailSet.size === 0) {
+                showStatus('当前没有重复邮箱的凭证', 'info');
+                return;
+            }
+            showDuplicateEmails = !showDuplicateEmails;
+            currentPage = 1;
+            applyFilters();
         }
 
         // 登录相关函数
@@ -2522,10 +2619,35 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
             currentEmailSearch = emailSearchQuery;
             filteredCredsData = {};
 
+            const emailCache = new Map();
+            const emailCounts = new Map();
+
+            for (const [fullPath, credInfo] of Object.entries(credsData)) {
+                const normalizedEmail = getNormalizedEmail(credInfo);
+                if (normalizedEmail) {
+                    emailCache.set(fullPath, normalizedEmail);
+                    emailCounts.set(normalizedEmail, (emailCounts.get(normalizedEmail) || 0) + 1);
+                }
+            }
+
+            duplicateEmailSet = new Set();
+            emailCounts.forEach((count, email) => {
+                if (count > 1) {
+                    duplicateEmailSet.add(email);
+                }
+            });
+
+            const duplicateCredentialCount = Array.from(emailCache.values()).filter(email => duplicateEmailSet.has(email)).length;
+            let duplicatesCleared = false;
+            if (showDuplicateEmails && duplicateEmailSet.size === 0) {
+                showDuplicateEmails = false;
+                duplicatesCleared = true;
+            }
+            updateDuplicateEmailButton(duplicateCredentialCount);
+
             for (const [fullPath, credInfo] of Object.entries(credsData)) {
                 let shouldInclude = false;
 
-                // 状态筛选
                 switch (statusFilter) {
                     case 'all':
                         shouldInclude = true;
@@ -2538,16 +2660,13 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                         break;
                 }
 
-                // 如果状态筛选已经排除，跳过错误码筛选
                 if (!shouldInclude) {
                     continue;
                 }
 
-                // 错误码筛选
                 const errorCodes = credInfo.status.error_codes || [];
                 switch (errorCodeFilter) {
                     case 'all':
-                        // 保持当前状态
                         break;
                     case 'no-errors':
                         shouldInclude = errorCodes.length === 0;
@@ -2556,7 +2675,6 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                         shouldInclude = errorCodes.length > 0;
                         break;
                     default:
-                        // 具体错误码筛选
                         const targetCode = parseInt(errorCodeFilter);
                         if (!isNaN(targetCode)) {
                             shouldInclude = errorCodes.includes(targetCode);
@@ -2564,30 +2682,42 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                         break;
                 }
 
-                if (shouldInclude && emailSearchQuery) {
-                    const candidates = [
-                        credInfo.user_email,
-                        credInfo.filename,
-                        credInfo.status && credInfo.status.user_email,
-                        credInfo.status && credInfo.status.email
-                    ];
+                if (!shouldInclude) {
+                    continue;
+                }
+
+                if (emailSearchQuery) {
+                    const candidates = collectEmailCandidates(credInfo);
+                    candidates.push(credInfo.filename);
                     shouldInclude = candidates.some(value =>
                         typeof value === 'string' && value.toLowerCase().includes(emailSearchQuery)
                     );
+                    if (!shouldInclude) {
+                        continue;
+                    }
                 }
 
-                if (shouldInclude) {
-                    filteredCredsData[fullPath] = credInfo;
+                if (showDuplicateEmails) {
+                    const normalizedEmail = emailCache.get(fullPath);
+                    shouldInclude = normalizedEmail ? duplicateEmailSet.has(normalizedEmail) : false;
+                    if (!shouldInclude) {
+                        continue;
+                    }
                 }
+
+                filteredCredsData[fullPath] = credInfo;
             }
 
-            // 清空选择状态
             selectedCredFiles.clear();
             updateBatchControls();
 
             currentPage = 1;
             renderCredsList();
             updatePagination();
+
+            if (duplicatesCleared) {
+                showStatus('当前没有重复邮箱的凭证', 'info');
+            }
         }
 
         // 获取当前页数据
@@ -3284,6 +3414,55 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
             } catch (error) {
                 console.error('batchAction error:', error);
                 showStatus(`批量操作网络错误: ${error.message}`, 'error');
+            }
+        }
+
+        async function bulkToggle429(action) {
+            const actionLabel = action === 'disable' ? '禁用' : '启用';
+            const targetSet = new Set();
+
+            Object.values(credsData).forEach(credInfo => {
+                const status = credInfo.status || {};
+                const errorCodes = Array.isArray(status.error_codes) ? status.error_codes : [];
+                const has429 = errorCodes.some(code => Number(code) === 429);
+                if (has429 && credInfo.filename) {
+                    targetSet.add(credInfo.filename);
+                }
+            });
+
+            const filenames = Array.from(targetSet);
+            if (filenames.length === 0) {
+                showStatus('当前没有包含429错误的凭证', 'info');
+                return;
+            }
+
+            if (!confirm(`确定要${actionLabel}所有 ${filenames.length} 个包含429错误的凭证吗？`)) {
+                return;
+            }
+
+            try {
+                showStatus(`正在${actionLabel}429错误凭证...`, 'info');
+
+                const response = await fetch('/creds/batch-action', {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ action, filenames })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    const successCount = data.success_count || 0;
+                    showStatus(`${actionLabel}完成：成功处理 ${successCount}/${filenames.length} 个文件`, 'success');
+                    selectedCredFiles.clear();
+                    updateBatchControls();
+                    await refreshCredsStatus();
+                } else {
+                    showStatus(`操作失败: ${data.detail || data.error || '未知错误'}`, 'error');
+                }
+            } catch (error) {
+                console.error('bulkToggle429 error:', error);
+                showStatus(`操作网络错误: ${error.message}`, 'error');
             }
         }
 
