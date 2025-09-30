@@ -39,11 +39,12 @@ class UsageStats:
         self._state_manager = None
         self._storage_adapter = None
         self._stats_cache: Dict[str, Dict[str, Any]] = {}
+        self._pending_evicted_entries: Dict[str, Dict[str, Any]] = {}  # 待强制写回的被淘汰项目
         self._initialized = False
         self._cache_dirty = False  # 缓存脏标记，减少不必要的写入
         self._last_save_time = 0
-        self._save_interval = 60  # 最多每分钟保存一次，减少I/O
-        self._max_cache_size = 100  # 严格限制缓存大小
+        self._save_interval = 30  # 最多每30秒保存一次，减少I/O
+        self._max_cache_size = 500  # 严格限制缓存大小
     
     async def initialize(self):
         """Initialize the usage stats module."""
@@ -197,6 +198,26 @@ class UsageStats:
         except Exception as e:
             log.error(f"Failed to save usage statistics: {e}")
     
+    async def _flush_evicted_entries(self) -> None:
+        """Write any evicted cache entries back to storage immediately."""
+        pending_items = []
+        with self._lock:
+            if self._pending_evicted_entries:
+                pending_items = [
+                    (filename, stats.copy())
+                    for filename, stats in self._pending_evicted_entries.items()
+                ]
+                self._pending_evicted_entries.clear()
+        if not pending_items:
+            return
+
+        for filename, stats in pending_items:
+            try:
+                await self._storage_adapter.update_usage_stats(filename, stats)
+                log.debug(f"Flushed evicted usage stats to storage: {filename}")
+            except Exception as e:
+                log.error(f"Failed to flush evicted usage stats for {filename}: {e}")
+
     def _get_or_create_stats(self, filename: str) -> Dict[str, Any]:
         """Get or create statistics entry for a credential file."""
         normalized_filename = self._normalize_filename(filename)
@@ -207,6 +228,10 @@ class UsageStats:
                 # 删除最旧的统计数据（基于next_reset_time或没有该字段的）
                 oldest_key = min(self._stats_cache.keys(),
                                key=lambda k: self._stats_cache[k].get('next_reset_time', ''))
+                removed_stats = self._stats_cache.get(oldest_key)
+                if removed_stats is not None:
+                    # 拦截要删除的条目，确保写回
+                    self._pending_evicted_entries[oldest_key] = removed_stats.copy()
                 del self._stats_cache[oldest_key]
                 self._cache_dirty = True
                 log.debug(f"Removed oldest usage stats cache entry: {oldest_key}")
@@ -294,6 +319,7 @@ class UsageStats:
         
         # Save stats asynchronously
         try:
+            await self._flush_evicted_entries()
             await self._save_stats()
         except Exception as e:
             log.error(f"Failed to save usage statistics after recording: {e}")
@@ -382,6 +408,7 @@ class UsageStats:
                 log.error(f"Failed to update daily limits: {e}")
                 raise
         
+        await self._flush_evicted_entries()
         await self._save_stats()
     
     async def reset_stats(self, filename: str = None):
@@ -412,6 +439,7 @@ class UsageStats:
                     })
                 log.info("Reset usage statistics for all credential files")
         
+        await self._flush_evicted_entries()
         await self._save_stats()
 
 # Global instance
