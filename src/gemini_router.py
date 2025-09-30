@@ -203,24 +203,7 @@ async def generate_content(
     # 发送请求（429重试已在google_api_client中处理）
     response = await send_gemini_request(api_payload, False, cred_mgr)
     
-    # 处理响应
-    try:
-        if hasattr(response, 'body'):
-            response_data = json.loads(response.body.decode() if isinstance(response.body, bytes) else response.body)
-        elif hasattr(response, 'content'):
-            response_data = json.loads(response.content.decode() if isinstance(response.content, bytes) else response.content)
-        else:
-            response_data = json.loads(str(response))
-        
-        return JSONResponse(content=response_data)
-        
-    except Exception as e:
-        log.error(f"Response processing failed: {e}")
-        # 返回原始响应
-        if hasattr(response, 'content'):
-            return JSONResponse(content=json.loads(response.content))
-        else:
-            raise HTTPException(status_code=500, detail="Response processing failed")
+    return response
 
 @router.post("/v1/v1beta/models/{model:path}:streamGenerateContent")
 @router.post("/v1/v1/models/{model:path}:streamGenerateContent")
