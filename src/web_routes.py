@@ -767,7 +767,7 @@ async def creds_action(request: CredFileActionRequest, token: str = Depends(veri
         
         # 检查凭证是否存在
         credential_data = await storage_adapter.get_credential(filename)
-        if not credential_data:
+        if credential_data is None:
             log.error(f"Credential not found: {filename}")
             raise HTTPException(status_code=404, detail="凭证文件不存在")
         
