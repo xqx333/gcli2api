@@ -398,12 +398,37 @@ class RedisManager:
     # ============ 状态管理 ============
     
     async def update_credential_state(self, filename: str, state_updates: Dict[str, Any]) -> bool:
-        """更新凭证状态到统一缓存"""
+        """更新凭证状态（统一缓存）"""
         self._ensure_initialized()
         start_time = time.time()
 
         try:
             existing_data = await self._credentials_cache_manager.get(filename)
+            if not existing_data:
+                operation_time = time.time() - start_time
+                log.debug(f"Skip state update for missing credential: {filename}")
+                self._operation_count += 1
+                self._operation_times.append(operation_time)
+                return True
+
+            has_credential = False
+            if isinstance(existing_data, dict):
+                credential_section = existing_data.get('credential')
+                if isinstance(credential_section, dict) and credential_section:
+                    has_credential = True
+                else:
+                    for key in existing_data.keys():
+                        if key not in ('credential', 'state', 'stats') and key not in STATE_FIELDS and key not in STATS_FIELDS:
+                            has_credential = True
+                            break
+
+            if not has_credential:
+                operation_time = time.time() - start_time
+                log.debug(f"Skip state update for credential without data: {filename}")
+                self._operation_count += 1
+                self._operation_times.append(operation_time)
+                return True
+
             normalized_entry, _ = self._normalize_entry(existing_data)
             normalized_entry["state"].update(state_updates)
 
@@ -420,7 +445,6 @@ class RedisManager:
             operation_time = time.time() - start_time
             log.error(f"Error updating credential state {filename} in {operation_time:.3f}s: {e}")
             return False
-
     async def get_credential_state(self, filename: str) -> Dict[str, Any]:
         """从统一缓存获取凭证状态"""
         self._ensure_initialized()

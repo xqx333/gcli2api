@@ -216,15 +216,31 @@ class PostgresManager:
     async def update_credential_state(self, filename: str, state_updates: Dict[str, Any]) -> bool:
         self._ensure_initialized()
         try:
-            existing_data = await self._credentials_cache_manager.get(filename, {})
-            if not existing_data:
-                existing_data = {'credential': {}, 'state': self._get_default_state(), 'stats': self._get_default_stats()}
-            existing_data['state'].update(state_updates)
-            return await self._credentials_cache_manager.set(filename, existing_data)
-        except Exception as e:
-            log.error(f'Error updating credential state {filename} in Postgres: {e}')
-            return False
+            existing_data = await self._credentials_cache_manager.get(filename)
+            if not isinstance(existing_data, dict) or not existing_data:
+                log.debug(f"Skip state update for missing credential: {filename}")
+                return True
 
+            credential_section = existing_data.get('credential') if isinstance(existing_data.get('credential'), dict) else None
+            has_credential = bool(credential_section)
+            if not has_credential:
+                for key in existing_data.keys():
+                    if key not in ('credential', 'state', 'stats') and key not in self.STATE_FIELDS and key not in self.STATS_FIELDS:
+                        has_credential = True
+                        break
+            if not has_credential:
+                log.debug(f"Skip state update for credential without data: {filename}")
+                return True
+
+            existing_data.setdefault('state', self._get_default_state())
+            existing_data['state'].update(state_updates)
+
+            success = await self._credentials_cache_manager.set(filename, existing_data)
+            return success
+
+        except Exception as e:
+            log.error(f"Error updating credential state {filename}: {e}")
+            return False
     async def get_credential_state(self, filename: str) -> Dict[str, Any]:
         self._ensure_initialized()
         try:
