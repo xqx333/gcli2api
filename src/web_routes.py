@@ -847,7 +847,7 @@ async def creds_batch_action(request: CredFileBatchActionRequest, token: str = D
                 
                 # 检查凭证是否存在
                 credential_data = await storage_adapter.get_credential(filename)
-                if not credential_data:
+                if credential_data is None:
                     errors.append(f"{filename}: 凭证不存在")
                     continue
                 
