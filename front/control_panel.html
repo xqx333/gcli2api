@@ -1534,6 +1534,12 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                                     placeholder="例如: 400,403" />
                                 <small class="config-note">用逗号分隔的错误码列表</small>
                             </div>
+                             <div class="form-group">
+                                <label for="autoBanKeywords">自动封禁关键字:</label>
+                                <textarea id="autoBanKeywords" class="config-input" rows="3"
+                                    placeholder="每行一个关键字，例如: 账号冻结"></textarea>
+                                <small class="config-note">当响应内容命中关键字时自动禁用凭证，匹配不区分大小写</small>
+                            </div>
                         </div>
 
                         <div class="config-group">
@@ -3238,6 +3244,7 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
             // 自动封禁配置
             document.getElementById('autoBanEnabled').checked = Boolean(currentConfig.auto_ban_enabled);
             setConfigField('autoBanErrorCodes', (currentConfig.auto_ban_error_codes || []).join(','));
+            setConfigField('autoBanKeywords', JSON.stringify(currentConfig.auto_ban_keywords || {}, null, 2));
 
             // 性能配置
             setConfigField('callsPerRotation', currentConfig.calls_per_rotation || 10);
@@ -3278,6 +3285,17 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                 console.log('DEBUG: configPassword元素:', passwordElement);
                 console.log('DEBUG: configPassword值:', passwordElement ? passwordElement.value : 'ELEMENT_NOT_FOUND');
 
+                const autoBanKeywordsRaw = document.getElementById('autoBanKeywords').value.trim();
+                let autoBanKeywordsConfig = {};
+                if (autoBanKeywordsRaw) {
+                    try {
+                        autoBanKeywordsConfig = JSON.parse(autoBanKeywordsRaw);
+                    } catch (error) {
+                        showStatus(`自动封禁关键字 JSON 格式错误: ${error.message}`,'error');
+                        return;
+                    }
+                }
+
                 const config = {
                     host: document.getElementById('host').value.trim(),
                     port: parseInt(document.getElementById('port').value) || 7861,
@@ -3297,6 +3315,7 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                         .split(',')
                         .map(code => parseInt(code.trim()))
                         .filter(code => !isNaN(code)),
+                    auto_ban_keywords: autoBanKeywordsConfig,
                     calls_per_rotation: parseInt(document.getElementById('callsPerRotation').value) || 10,
                     retry_429_enabled: document.getElementById('retry429Enabled').checked,
                     retry_429_max_retries: parseInt(document.getElementById('retry429MaxRetries').value) || 20,

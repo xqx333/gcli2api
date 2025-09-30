@@ -1260,11 +1260,15 @@ async def get_config(token: str = Depends(verify_token)):
         # 自动封禁配置
         current_config["auto_ban_enabled"] = await config.get_auto_ban_enabled()
         current_config["auto_ban_error_codes"] = await config.get_auto_ban_error_codes()
+        current_config["auto_ban_keywords"] = await config.get_auto_ban_keywords()
         
         # 检查环境变量锁定状态
         if os.getenv("AUTO_BAN"):
             env_locked.append("auto_ban_enabled")
-        
+        if os.getenv("AUTO_BAN_KEYWORDS"):
+            env_locked.append("auto_ban_keywords")
+
+
         # 从存储系统读取配置
         storage_adapter = await get_storage_adapter()
         storage_config = await storage_adapter.get_all_config()
@@ -1362,6 +1366,45 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_to
                 raise HTTPException(status_code=400, detail="429重试间隔必须是有效的数字")
         
         
+        if "auto_ban_keywords" in new_config:
+            keywords_raw = new_config["auto_ban_keywords"]
+            sanitized_mapping = {}
+
+            if isinstance(keywords_raw, dict):
+                for key, value in keywords_raw.items():
+                    key_str = str(key).strip()
+                    if not key_str:
+                        continue
+                    values = []
+                    if isinstance(value, list):
+                        iterable = value
+                    else:
+                        iterable = [value]
+                    for item in iterable:
+                        cleaned = item.strip() if isinstance(item, str) else str(item).strip()
+                        if cleaned:
+                            values.append(cleaned)
+                    if values:
+                        sanitized_mapping[key_str] = values
+            elif isinstance(keywords_raw, list):
+                values = []
+                for item in keywords_raw:
+                    cleaned = item.strip() if isinstance(item, str) else str(item).strip()
+                    if cleaned:
+                        values.append(cleaned)
+                if values:
+                    sanitized_mapping["*"] = values
+            elif isinstance(keywords_raw, str):
+                values = [part.strip() for part in keywords_raw.splitlines() if part.strip()]
+                if values:
+                    sanitized_mapping["*"] = values
+            elif keywords_raw is None:
+                sanitized_mapping = {}
+            else:
+                raise HTTPException(status_code=400, detail="自动封禁关键字必须是字符串、字符串数组或映射")
+
+            new_config["auto_ban_keywords"] = sanitized_mapping
+
         if "anti_truncation_max_attempts" in new_config:
             if not isinstance(new_config["anti_truncation_max_attempts"], int) or new_config["anti_truncation_max_attempts"] < 1 or new_config["anti_truncation_max_attempts"] > 10:
                 raise HTTPException(status_code=400, detail="抗截断最大重试次数必须是1-10之间的整数")
@@ -1417,6 +1460,8 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_to
             env_locked_keys.add("googleapis_proxy_url")
         if os.getenv("AUTO_BAN"):
             env_locked_keys.add("auto_ban_enabled")
+        if os.getenv("AUTO_BAN_KEYWORDS"):
+            env_locked_keys.add("auto_ban_keywords")
         if os.getenv("RETRY_429_MAX_RETRIES"):
             env_locked_keys.add("retry_429_max_retries")
         if os.getenv("RETRY_429_ENABLED"):
@@ -1502,6 +1547,7 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_to
             # 4. 其他可热更新的配置项
             hot_updatable_configs = [
                 "auto_ban_enabled", "auto_ban_error_codes",
+                "auto_ban_keywords",
                 "retry_429_enabled", "retry_429_max_retries", "retry_429_interval",
                 "anti_truncation_max_attempts", "compatibility_mode_enabled"
             ]

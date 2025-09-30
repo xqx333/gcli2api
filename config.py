@@ -3,12 +3,16 @@ Configuration constants for the Geminicli2api proxy server.
 Centralizes all configuration to avoid duplication across modules.
 """
 import os
-from typing import Any, Optional
+import json
+from typing import Any, Optional, Dict, List
 
 # Client Configuration
 
 # 需要自动封禁的错误码 (默认值，可通过环境变量或配置覆盖)
 AUTO_BAN_ERROR_CODES = [401, 403]
+
+# 默认自动封禁关键字配置（按状态码匹配关键字）
+AUTO_BAN_KEYWORDS: Dict[str, List[str]] = {}
 
 # Default Safety Settings for Google API
 DEFAULT_SAFETY_SETTINGS = [
@@ -141,6 +145,73 @@ async def get_auto_ban_error_codes() -> list:
     if codes and isinstance(codes, list):
         return codes
     return AUTO_BAN_ERROR_CODES
+
+async def get_auto_ban_keywords() -> Dict[str, List[str]]:
+    """Get auto ban keywords mapping from env or config."""
+    env_value = os.getenv("AUTO_BAN_KEYWORDS")
+    if env_value:
+        try:
+            parsed = json.loads(env_value)
+            sanitized = _sanitize_auto_ban_keywords(parsed)
+            if sanitized:
+                return sanitized
+        except json.JSONDecodeError:
+            pass
+
+    keywords = await get_config_value("auto_ban_keywords")
+    sanitized = _sanitize_auto_ban_keywords(keywords)
+    if sanitized:
+        return sanitized
+    return AUTO_BAN_KEYWORDS
+
+
+def _sanitize_auto_ban_keywords(raw: Any) -> Dict[str, List[str]]:
+    """Normalize raw keyword configuration into {status: [keywords]} mapping."""
+    mapping: Dict[str, List[str]] = {}
+    if not raw:
+        return mapping
+
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            key_str = str(key).strip()
+            if not key_str:
+                continue
+            values: List[str] = []
+            if isinstance(value, list):
+                iterable = value
+            else:
+                iterable = [value]
+            for item in iterable:
+                cleaned = item.strip() if isinstance(item, str) else str(item).strip()
+                if cleaned:
+                    values.append(cleaned)
+            if values:
+                mapping[key_str] = values
+        return mapping
+
+    if isinstance(raw, list):
+        values = []
+        for item in raw:
+            cleaned = item.strip() if isinstance(item, str) else str(item).strip()
+            if cleaned:
+                values.append(cleaned)
+        if values:
+            mapping["*"] = values
+        return mapping
+
+    if isinstance(raw, str):
+        cleaned_values = [part.strip() for part in raw.splitlines() if part.strip()]
+        if cleaned_values:
+            mapping["*"] = cleaned_values
+        return mapping
+
+    try:
+        parsed = json.loads(raw)
+        return _sanitize_auto_ban_keywords(parsed)
+    except Exception:
+        return mapping
+
+
 
 async def get_retry_429_max_retries() -> int:
     """Get max retries for 429 errors."""

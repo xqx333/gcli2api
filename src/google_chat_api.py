@@ -5,6 +5,7 @@ This module is used by both OpenAI compatibility layer and native Gemini endpoin
 import asyncio
 import gc
 import json
+from typing import Optional
 
 from fastapi import Response
 from fastapi.responses import StreamingResponse
@@ -18,6 +19,7 @@ from config import (
     is_search_model,
     get_auto_ban_enabled,
     get_auto_ban_error_codes,
+    get_auto_ban_keywords,
     get_retry_429_max_retries,
     get_retry_429_enabled,
     get_retry_429_interval
@@ -69,22 +71,81 @@ def _extract_error_message(status_code: int, response_content: str = "") -> str:
             return content
     return fallback_messages.get(status_code, f"API error: {status_code}")
 
-async def _handle_api_error(credential_manager: CredentialManager, status_code: int, response_content: str = ""):
-    """Handle API errors by rotating credentials when needed. Error recording should be done before calling this function."""
+
+async def _should_auto_ban(status_code: int, response_content: str) -> tuple[bool, Optional[str]]:
+    """Evaluate auto-ban rules and return (triggered, reason)."""
+    if not await get_auto_ban_enabled():
+        return False, None
+
+    codes = await get_auto_ban_error_codes()
+    code_matched = status_code in codes if codes else False
+
+    keywords_map = await get_auto_ban_keywords()
+    keywords_to_check: list[str] = []
+    require_keyword_match = False
+
+    if isinstance(keywords_map, dict) and keywords_map:
+        str_code = str(status_code)
+        if str_code in keywords_map and keywords_map[str_code]:
+            keywords_to_check.extend(keywords_map[str_code])
+            require_keyword_match = True
+        elif "*" in keywords_map and keywords_map["*"]:
+            keywords_to_check.extend(keywords_map["*"])
+            require_keyword_match = True
+    elif isinstance(keywords_map, list) and keywords_map:
+        keywords_to_check.extend([kw for kw in keywords_map if kw])
+        require_keyword_match = True
+
+    if require_keyword_match:
+        if not response_content or not keywords_to_check:
+            return False, None
+        normalized_content = response_content.lower()
+        for keyword in keywords_to_check:
+            cleaned = keyword.strip()
+            if cleaned and cleaned.lower() in normalized_content:
+                if code_matched:
+                    return True, f"keyword '{cleaned}'"
+                # 提供关键字但未匹配状态码时不触发
+                return False, None
+        return False, None
+
+    if code_matched:
+        return True, f"status {status_code}"
+    return False, None
+
+
+async def _handle_api_error(credential_manager: CredentialManager, status_code: int, response_content: str = "", current_file: str = None):
+    """Handle API errors by rotating or disabling credentials when needed."""
+    auto_ban_triggered = False
+    trigger_reason: Optional[str] = None
+
+    if credential_manager:
+        auto_ban_triggered, trigger_reason = await _should_auto_ban(status_code, response_content)
+
+    if auto_ban_triggered and credential_manager:
+        if trigger_reason:
+            if response_content:
+                log.error("Google API returned %s - auto ban triggered (%s). Response details: %s" % (status_code, trigger_reason, response_content[:500]))
+            else:
+                log.warning("Google API returned %s - auto ban triggered (%s)" % (status_code, trigger_reason))
+        if current_file:
+            disabled_success = await credential_manager.set_cred_disabled(current_file, True)
+            if not disabled_success:
+                await credential_manager.force_rotate_credential()
+        else:
+            await credential_manager.force_rotate_credential()
+        return
+
     if status_code == 429 and credential_manager:
         if response_content:
             log.error(f"Google API returned status 429 - quota exhausted. Response details: {response_content[:500]}")
         else:
             log.error("Google API returned status 429 - quota exhausted, switching credentials")
         await credential_manager.force_rotate_credential()
-    
-    # 处理自动封禁的错误码
-    elif await get_auto_ban_enabled() and status_code in await get_auto_ban_error_codes() and credential_manager:
-        if response_content:
-            log.error(f"Google API returned status {status_code} - auto ban triggered. Response details: {response_content[:500]}")
-        else:
-            log.warning(f"Google API returned status {status_code} - auto ban triggered, rotating credentials")
-        await credential_manager.force_rotate_credential()
+
+
+
+
 
 async def _prepare_request_headers_and_payload(payload: dict, credential_data: dict):
     """Prepare request headers and final payload from credential data."""
@@ -249,7 +310,7 @@ async def send_gemini_request(payload: dict, is_streaming: bool = False, credent
                         await client.aclose()
                         
                         # 处理凭证轮换
-                        await _handle_api_error(credential_manager, resp.status_code, response_content)
+                        await _handle_api_error(credential_manager, resp.status_code, response_content, current_file)
                         
                         # 返回错误流
                         async def error_stream():
@@ -368,7 +429,7 @@ def _handle_streaming_response_managed(resp, stream_ctx, client, credential_mana
                 error_message = _extract_error_message(resp.status_code, response_content)
                 await credential_manager.record_api_call_result(current_file, False, resp.status_code, error_message)
             
-            await _handle_api_error(credential_manager, resp.status_code, response_content)
+            await _handle_api_error(credential_manager, resp.status_code, response_content, current_file)
             
             error_response = {
                 "error": {
@@ -509,7 +570,7 @@ async def _handle_non_streaming_response(resp, credential_manager: CredentialMan
             error_message = _extract_error_message(resp.status_code, response_content)
             await credential_manager.record_api_call_result(current_file, False, resp.status_code, error_message)
         
-        await _handle_api_error(credential_manager, resp.status_code, response_content)
+        await _handle_api_error(credential_manager, resp.status_code, response_content, current_file)
         
         return _create_error_response(f"API error: {resp.status_code}", resp.status_code)
 
