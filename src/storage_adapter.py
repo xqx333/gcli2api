@@ -347,8 +347,7 @@ async def get_storage_adapter() -> StorageAdapter:
     
     if _storage_adapter is None:
         _storage_adapter = StorageAdapter()
-        await _storage_adapter.initialize()
-    
+    await _storage_adapter.initialize()
     return _storage_adapter
 
 
