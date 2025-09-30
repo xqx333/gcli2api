@@ -6,13 +6,25 @@ import asyncio
 import json
 import os
 import time
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from collections import deque
 
 import redis.asyncio as redis
 from log import log
 from .cache_manager import UnifiedCacheManager, CacheBackend
 
+
+STATE_FIELDS = {
+    "error_codes", "error_details", "disabled", "last_success", "user_email"
+}
+
+STATS_FIELDS = {
+    "gemini_2_5_pro_calls",
+    "total_calls",
+    "next_reset_time",
+    "daily_limit_gemini_2_5_pro",
+    "daily_limit_total"
+}
 
 class RedisCacheBackend(CacheBackend):
     """Redis缓存后端实现"""
@@ -199,58 +211,147 @@ class RedisManager:
     
     # ============ 凭证管理 ============
     
+    def _create_default_entry(self) -> Dict[str, Any]:
+        return {
+            "credential": {},
+            "state": self._get_default_state(),
+            "stats": self._get_default_stats()
+        }
+
+    def _normalize_entry(self, entry: Optional[Dict[str, Any]]) -> Tuple[Dict[str, Any], bool]:
+        changed = False
+
+        default_state = self._get_default_state()
+        default_stats = self._get_default_stats()
+        normalized = {
+            "credential": {},
+            "state": default_state.copy(),
+            "stats": default_stats.copy()
+        }
+
+        if not isinstance(entry, dict) or not entry:
+            return normalized, True
+
+        credential_data = entry.get("credential")
+        if isinstance(credential_data, dict):
+            normalized["credential"] = credential_data
+        else:
+            candidate_fields = {
+                key: value
+                for key, value in entry.items()
+                if key not in ("credential", "state", "stats")
+                and key not in STATE_FIELDS
+                and key not in STATS_FIELDS
+            }
+            if candidate_fields:
+                normalized["credential"] = candidate_fields
+                changed = True
+            elif not ({"credential", "state", "stats"} & set(entry.keys())):
+                normalized["credential"] = dict(entry)
+                changed = True
+
+        original_state = entry.get("state") if isinstance(entry.get("state"), dict) else None
+        if original_state:
+            normalized["state"].update(original_state)
+        else:
+            changed = True
+
+        for field in STATE_FIELDS:
+            if field in entry and field not in normalized["state"]:
+                normalized["state"][field] = entry[field]
+                changed = True
+
+        if original_state is not None:
+            missing_state_fields = [field for field in default_state if field not in original_state]
+            if missing_state_fields:
+                for field in missing_state_fields:
+                    normalized["state"].setdefault(field, default_state[field])
+                changed = True
+        else:
+            for field, value in default_state.items():
+                if field not in normalized["state"]:
+                    normalized["state"][field] = value
+            changed = True
+
+        original_stats = entry.get("stats") if isinstance(entry.get("stats"), dict) else None
+        if original_stats:
+            normalized["stats"].update(original_stats)
+        else:
+            changed = True
+
+        for field in STATS_FIELDS:
+            if field in entry and field not in normalized["stats"]:
+                normalized["stats"][field] = entry[field]
+                changed = True
+
+        if original_stats is not None:
+            missing_stats_fields = [field for field in default_stats if field not in original_stats]
+            if missing_stats_fields:
+                for field in missing_stats_fields:
+                    normalized["stats"].setdefault(field, default_stats[field])
+                changed = True
+        else:
+            for field, value in default_stats.items():
+                if field not in normalized["stats"]:
+                    normalized["stats"][field] = value
+            changed = True
+
+        return normalized, changed
+
     async def store_credential(self, filename: str, credential_data: Dict[str, Any]) -> bool:
         """存储凭证数据到统一缓存"""
         self._ensure_initialized()
         start_time = time.time()
-        
+
         try:
-            # 获取现有数据或创建新数据
-            existing_data = await self._credentials_cache_manager.get(filename, {})
-            
-            credential_entry = {
-                "credential": credential_data,
-                "state": existing_data.get("state", self._get_default_state()),
-                "stats": existing_data.get("stats", self._get_default_stats())
-            }
-            
-            success = await self._credentials_cache_manager.set(filename, credential_entry)
-            
-            # 性能监控
+            existing_data = await self._credentials_cache_manager.get(filename)
+            normalized_entry, _ = self._normalize_entry(existing_data)
+            normalized_entry["credential"] = credential_data
+
+            success = await self._credentials_cache_manager.set(filename, normalized_entry)
+
             self._operation_count += 1
             operation_time = time.time() - start_time
             self._operation_times.append(operation_time)
-            
+
             log.debug(f"Stored credential to unified cache: {filename} in {operation_time:.3f}s")
             return success
-                
+
         except Exception as e:
             operation_time = time.time() - start_time
             log.error(f"Error storing credential {filename} in {operation_time:.3f}s: {e}")
             return False
-    
+
     async def get_credential(self, filename: str) -> Optional[Dict[str, Any]]:
         """从统一缓存获取凭证数据"""
         self._ensure_initialized()
         start_time = time.time()
-        
+
         try:
             credential_entry = await self._credentials_cache_manager.get(filename)
-            
-            # 性能监控
-            self._operation_count += 1
+
+            if not credential_entry:
+                operation_time = time.time() - start_time
+                self._operation_count += 1
+                self._operation_times.append(operation_time)
+                return None
+
+            normalized_entry, changed = self._normalize_entry(credential_entry)
+            if changed:
+                await self._credentials_cache_manager.set(filename, normalized_entry)
+
             operation_time = time.time() - start_time
+            self._operation_count += 1
             self._operation_times.append(operation_time)
-            
-            if credential_entry and "credential" in credential_entry:
-                return credential_entry["credential"]
-            return None
-            
+
+            log.debug(f"Retrieved credential from unified cache: {filename} in {operation_time:.3f}s")
+            return normalized_entry.get("credential")
+
         except Exception as e:
             operation_time = time.time() - start_time
-            log.error(f"Error retrieving credential {filename} in {operation_time:.3f}s: {e}")
+            log.error(f"Error getting credential {filename} in {operation_time:.3f}s: {e}")
             return None
-    
+
     async def list_credentials(self) -> List[str]:
         """从统一缓存列出所有凭证文件名"""
         self._ensure_initialized()
@@ -297,89 +398,86 @@ class RedisManager:
     # ============ 状态管理 ============
     
     async def update_credential_state(self, filename: str, state_updates: Dict[str, Any]) -> bool:
-        """更新凭证状态（使用统一缓存）"""
+        """更新凭证状态到统一缓存"""
         self._ensure_initialized()
         start_time = time.time()
-        
+
         try:
-            # 获取现有数据或创建新数据
-            existing_data = await self._credentials_cache_manager.get(filename, {})
-            
-            if not existing_data:
-                existing_data = {
-                    "credential": {},
-                    "state": self._get_default_state(),
-                    "stats": self._get_default_stats()
-                }
-            
-            # 更新状态数据
-            existing_data["state"].update(state_updates)
-            
-            success = await self._credentials_cache_manager.set(filename, existing_data)
-            
-            # 性能监控
+            existing_data = await self._credentials_cache_manager.get(filename)
+            normalized_entry, _ = self._normalize_entry(existing_data)
+            normalized_entry["state"].update(state_updates)
+
+            success = await self._credentials_cache_manager.set(filename, normalized_entry)
+
             self._operation_count += 1
             operation_time = time.time() - start_time
             self._operation_times.append(operation_time)
-            
+
             log.debug(f"Updated credential state in unified cache: {filename} in {operation_time:.3f}s")
             return success
-                
+
         except Exception as e:
             operation_time = time.time() - start_time
             log.error(f"Error updating credential state {filename} in {operation_time:.3f}s: {e}")
             return False
-    
+
     async def get_credential_state(self, filename: str) -> Dict[str, Any]:
         """从统一缓存获取凭证状态"""
         self._ensure_initialized()
         start_time = time.time()
-        
+
         try:
             credential_entry = await self._credentials_cache_manager.get(filename)
-            
-            # 性能监控
-            self._operation_count += 1
-            operation_time = time.time() - start_time
-            self._operation_times.append(operation_time)
-            
-            if credential_entry and "state" in credential_entry:
-                log.debug(f"Retrieved credential state from unified cache: {filename} in {operation_time:.3f}s")
-                return credential_entry["state"]
-            else:
-                # 返回默认状态
+
+            if not credential_entry:
+                operation_time = time.time() - start_time
+                self._operation_count += 1
+                self._operation_times.append(operation_time)
                 return self._get_default_state()
-                
+
+            normalized_entry, changed = self._normalize_entry(credential_entry)
+            if changed:
+                await self._credentials_cache_manager.set(filename, normalized_entry)
+
+            operation_time = time.time() - start_time
+            self._operation_count += 1
+            self._operation_times.append(operation_time)
+
+            log.debug(f"Retrieved credential state from unified cache: {filename} in {operation_time:.3f}s")
+            return normalized_entry["state"]
+
         except Exception as e:
             operation_time = time.time() - start_time
             log.error(f"Error getting credential state {filename} in {operation_time:.3f}s: {e}")
             return self._get_default_state()
-    
+
     async def get_all_credential_states(self) -> Dict[str, Dict[str, Any]]:
         """从统一缓存获取所有凭证状态"""
         self._ensure_initialized()
         start_time = time.time()
-        
+
         try:
             all_data = await self._credentials_cache_manager.get_all()
-            
-            states = {}
-            for filename, cred_data in all_data.items():
-                states[filename] = cred_data.get("state", self._get_default_state())
-            
-            # 性能监控
+            states: Dict[str, Dict[str, Any]] = {}
+
+            for filename, raw_entry in all_data.items():
+                normalized_entry, changed = self._normalize_entry(raw_entry)
+                if changed:
+                    await self._credentials_cache_manager.set(filename, normalized_entry)
+                states[filename] = normalized_entry["state"]
+
             self._operation_count += 1
             operation_time = time.time() - start_time
             self._operation_times.append(operation_time)
-            
+
             log.debug(f"Retrieved all credential states from unified cache ({len(states)}) in {operation_time:.3f}s")
             return states
-            
+
         except Exception as e:
             operation_time = time.time() - start_time
             log.error(f"Error getting all credential states in {operation_time:.3f}s: {e}")
             return {}
-    
+
     # ============ 配置管理 ============
     
     async def set_config(self, key: str, value: Any) -> bool:
@@ -479,26 +577,27 @@ class RedisManager:
             return self._get_default_stats()
     
     async def get_all_usage_stats(self) -> Dict[str, Dict[str, Any]]:
-        """从统一缓存获取所有使用统计"""
+        """Get usage statistics for all credentials from the unified cache."""
         self._ensure_initialized()
         start_time = time.time()
-        
+
         try:
             all_data = await self._credentials_cache_manager.get_all()
-            
-            stats = {}
-            for filename, cred_data in all_data.items():
-                if "stats" in cred_data:
-                    stats[filename] = cred_data["stats"]
-            
-            # 性能监控
+            stats: Dict[str, Dict[str, Any]] = {}
+
+            for filename, raw_entry in all_data.items():
+                normalized_entry, changed = self._normalize_entry(raw_entry)
+                if changed:
+                    await self._credentials_cache_manager.set(filename, normalized_entry)
+                stats[filename] = normalized_entry["stats"]
+
             self._operation_count += 1
             operation_time = time.time() - start_time
             self._operation_times.append(operation_time)
-            
+
             log.debug(f"Retrieved all usage stats from unified cache ({len(stats)}) in {operation_time:.3f}s")
             return stats
-            
+
         except Exception as e:
             operation_time = time.time() - start_time
             log.error(f"Error getting all usage stats in {operation_time:.3f}s: {e}")
