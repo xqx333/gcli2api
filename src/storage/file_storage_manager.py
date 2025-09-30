@@ -62,7 +62,7 @@ class FileStorageManager:
     
     # 状态字段常量
     STATE_FIELDS = {
-        "error_codes", "disabled", "last_success", "user_email",
+        "error_codes", "error_details", "disabled", "last_success", "user_email",
         "gemini_2_5_pro_calls", "total_calls", "next_reset_time",
         "daily_limit_gemini_2_5_pro", "daily_limit_total"
     }
@@ -72,6 +72,7 @@ class FileStorageManager:
         "error_codes": [],
         "disabled": False,
         "user_email": None,
+        "error_details": {},
         "gemini_2_5_pro_calls": 0,
         "total_calls": 0,
         "next_reset_time": None,
@@ -398,7 +399,7 @@ class FileStorageManager:
             state_data = {k: v for k, v in section_data.items() if k in self.STATE_FIELDS}
             
             # 确保必要字段存在
-            basic_fields = {"error_codes", "disabled", "last_success", "user_email"}
+            basic_fields = {"error_codes", "error_details", "disabled", "last_success", "user_email"}
             default_state = self.get_default_state()
             
             for field in basic_fields:
@@ -424,7 +425,7 @@ class FileStorageManager:
                 state_data = {k: v for k, v in section_data.items() if k in self.STATE_FIELDS}
                 
                 # 确保必要字段存在
-                basic_fields = {"error_codes", "disabled", "last_success", "user_email"}
+                basic_fields = {"error_codes", "error_details", "disabled", "last_success", "user_email"}
                 default_state = self.get_default_state()
                 
                 for field in basic_fields:

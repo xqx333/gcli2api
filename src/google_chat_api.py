@@ -42,6 +42,33 @@ def _create_error_response(message: str, status_code: int = 500) -> Response:
         media_type="application/json"
     )
 
+def _extract_error_message(status_code: int, response_content: str = "") -> str:
+    """Return a concise error message from raw response content."""
+    fallback_messages = {
+        429: "429 rate limit exceeded"
+    }
+    if response_content:
+        content = response_content.strip()
+        if content:
+            try:
+                parsed = json.loads(content)
+                if isinstance(parsed, dict):
+                    error_block = parsed.get('error')
+                    if isinstance(error_block, dict):
+                        message = error_block.get('message')
+                        if isinstance(message, str) and message.strip():
+                            return message.strip()
+                    if 'message' in parsed and isinstance(parsed['message'], str):
+                        message = parsed['message'].strip()
+                        if message:
+                            return message
+            except Exception:
+                pass
+            if len(content) > 500:
+                content = content[:500]
+            return content
+    return fallback_messages.get(status_code, f"API error: {status_code}")
+
 async def _handle_api_error(credential_manager: CredentialManager, status_code: int, response_content: str = ""):
     """Handle API errors by rotating credentials when needed. Error recording should be done before calling this function."""
     if status_code == 429 and credential_manager:
@@ -158,7 +185,7 @@ async def send_gemini_request(payload: dict, is_streaming: bool = False, credent
                             log.error("Google API returned status 429 (STREAMING) - quota exhausted, no response details available")
                         
                         if credential_manager and current_file:
-                            await credential_manager.record_api_call_result(current_file, False, 429)
+                            await credential_manager.record_api_call_result(current_file, False, 429, _extract_error_message(429, response_content))
                         
                         # 清理资源
                         try:
@@ -211,7 +238,8 @@ async def send_gemini_request(payload: dict, is_streaming: bool = False, credent
                         
                         # 记录API调用错误
                         if credential_manager and current_file:
-                            await credential_manager.record_api_call_result(current_file, False, resp.status_code)
+                            error_message = _extract_error_message(resp.status_code, response_content)
+                            await credential_manager.record_api_call_result(current_file, False, resp.status_code, error_message)
                         
                         # 清理资源
                         try:
@@ -255,8 +283,13 @@ async def send_gemini_request(payload: dict, is_streaming: bool = False, credent
                     
                     if resp.status_code == 429:
                         # 记录429错误
+                        response_content = ''
+                        try:
+                            response_content = resp.text or ''
+                        except Exception:
+                            response_content = ''
                         if credential_manager and current_file:
-                            await credential_manager.record_api_call_result(current_file, False, 429)
+                            await credential_manager.record_api_call_result(current_file, False, 429, _extract_error_message(429, response_content))
                         
                         # 如果重试可用且未达到最大次数，继续重试
                         if retry_429_enabled and attempt < max_retries:
@@ -332,7 +365,8 @@ def _handle_streaming_response_managed(resp, stream_ctx, client, credential_mana
             
             # 记录API调用错误
             if credential_manager and current_file:
-                await credential_manager.record_api_call_result(current_file, False, resp.status_code)
+                error_message = _extract_error_message(resp.status_code, response_content)
+                await credential_manager.record_api_call_result(current_file, False, resp.status_code, error_message)
             
             await _handle_api_error(credential_manager, resp.status_code, response_content)
             
@@ -472,7 +506,8 @@ async def _handle_non_streaming_response(resp, credential_manager: CredentialMan
         
         # 记录API调用错误
         if credential_manager and current_file:
-            await credential_manager.record_api_call_result(current_file, False, resp.status_code)
+            error_message = _extract_error_message(resp.status_code, response_content)
+            await credential_manager.record_api_call_result(current_file, False, resp.status_code, error_message)
         
         await _handle_api_error(credential_manager, resp.status_code, response_content)
         

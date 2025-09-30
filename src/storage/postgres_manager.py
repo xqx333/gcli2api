@@ -149,6 +149,7 @@ class PostgresManager:
     def _get_default_state(self) -> Dict[str, Any]:
         return {
             'error_codes': [],
+            'error_details': {},
             'disabled': False,
             'last_success': time.time(),
             'user_email': None,

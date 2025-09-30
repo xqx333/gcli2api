@@ -537,6 +537,7 @@ async def upload_credentials(files: List[UploadFile] = File(...), token: str = D
                             import time
                             default_state = {
                                 "error_codes": [],
+                                "error_details": {},
                                 "disabled": False,
                                 "last_success": time.time(),
                                 "user_email": None,
@@ -656,6 +657,7 @@ async def get_creds_status(token: str = Depends(verify_token)):
                     import time
                     default_state = {
                         "error_codes": [],
+                        "error_details": {},
                         "disabled": False,
                         "last_success": time.time(),
                         "user_email": None,
@@ -673,6 +675,7 @@ async def get_creds_status(token: str = Depends(verify_token)):
                     # 创建临时状态用于显示
                     file_status = {
                         "error_codes": [],
+                        "error_details": {},
                         "disabled": False,
                         "last_success": time.time(),
                         "user_email": None,

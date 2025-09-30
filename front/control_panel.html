@@ -653,6 +653,21 @@
             flex-wrap: wrap;
         }
 
+        .error-code-chip {
+            display: inline-block;
+            background-color: #fdecef;
+            color: #c82333;
+            padding: 2px 6px;
+            border-radius: 8px;
+            margin-left: 4px;
+            font-size: 12px;
+            cursor: default;
+        }
+
+        .error-code-chip:hover {
+            background-color: #f9d5db;
+        }
+
         .error-code-badge {
             display: inline-block;
             background-color: #dc3545;
@@ -1798,6 +1813,33 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
             }
         }
 
+        function escapeHtml(value) {
+            if (value === undefined || value === null) {
+                return '';
+            }
+            return String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function formatTooltipTimestamp(timestamp) {
+            if (!timestamp) {
+                return '';
+            }
+            const date = new Date(timestamp * 1000);
+            if (Number.isNaN(date.getTime())) {
+                return '';
+            }
+            try {
+                return date.toLocaleString('zh-CN', { hour12: false });
+            } catch (err) {
+                return date.toISOString();
+            }
+        }
+
         function collectEmailCandidates(credInfo) {
             const candidates = [];
             if (!credInfo) {
@@ -2822,8 +2864,38 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
             console.log(`Error codes for ${filename}:`, status.error_codes);
 
             if (status.error_codes && status.error_codes.length > 0) {
-                statusBadges += `<span class="error-codes">错误码: ${status.error_codes.join(', ')}</span>`;
-                // 检查是否包含自动封禁的错误码
+                const errorDetails = status.error_details || {};
+                const errorCodeChips = status.error_codes.map(code => {
+                    const codeKey = String(code);
+                    const detail = (errorDetails[codeKey] ?? errorDetails[code]) || null;
+                    const tooltipParts = [];
+                    if (detail) {
+                        if (typeof detail === 'string') {
+                            const trimmed = detail.trim();
+                            if (trimmed) {
+                                tooltipParts.push(trimmed);
+                            }
+                        } else if (typeof detail === 'object') {
+                            if (detail && typeof detail.message === 'string') {
+                                const trimmedMessage = detail.message.trim();
+                                if (trimmedMessage) {
+                                    tooltipParts.push(trimmedMessage);
+                                }
+                            }
+                            if (detail && detail.timestamp) {
+                                const formatted = formatTooltipTimestamp(detail.timestamp);
+                                if (formatted) {
+                                    tooltipParts.push(`时间: ${formatted}`);
+                                }
+                            }
+                        }
+                    }
+                    const tooltip = tooltipParts.join('\n');
+                    const titleAttr = tooltip ? ` title="${escapeHtml(tooltip).replace(/\n/g, '&#10;')}"` : '';
+                    return `<span class="error-code-chip"${titleAttr}>${code}</span>`;
+                }).join(' ');
+
+                statusBadges += `<span class="error-codes">错误码: ${errorCodeChips}</span>`;
                 const autoBanErrors = status.error_codes.filter(code => code === 400 || code === 403);
                 if (autoBanErrors.length > 0 && status.disabled) {
                     statusBadges += `<span class="status-badge" style="background-color: #e74c3c; color: white;">AUTO_BAN</span>`;
@@ -2832,6 +2904,7 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                 // 显示无错误码状态
                 statusBadges += `<span class="status-badge" style="background-color: #28a745; color: white;">无错误</span>`;
             }
+
 
             // 为HTML ID生成安全的标识符
             const pathId = btoa(encodeURIComponent(fullPath)).replace(/[+/=]/g, '_');

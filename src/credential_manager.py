@@ -411,7 +411,7 @@ class CredentialManager:
             log.error(f"Error fetching user email for {credential_name}: {e}")
             return None
     
-    async def record_api_call_result(self, credential_name: str, success: bool, error_code: Optional[int] = None):
+    async def record_api_call_result(self, credential_name: str, success: bool, error_code: Optional[int] = None, error_message: Optional[str] = None):
         """记录API调用结果"""
         try:
             state_updates = {}
@@ -420,6 +420,7 @@ class CredentialManager:
                 state_updates["last_success"] = time.time()
                 # 清除错误码（如果之前有的话）
                 state_updates["error_codes"] = []
+                state_updates["error_details"] = {}
             elif error_code:
                 # 记录错误码
                 current_state = await self._storage_adapter.get_credential_state(credential_name)
@@ -432,6 +433,31 @@ class CredentialManager:
                         error_codes = error_codes[-10:]
                     
                 state_updates["error_codes"] = error_codes
+
+                # 记录错误详细信息供前端展示
+                error_details = current_state.get("error_details", {}) or {}
+                error_details = dict(error_details)
+
+                detail_key = str(error_code)
+                if error_message:
+                    cleaned = error_message.strip()
+                    if cleaned:
+                        error_details[detail_key] = {
+                            "message": cleaned,
+                            "timestamp": time.time()
+                        }
+                elif detail_key not in error_details:
+                    error_details[detail_key] = {
+                        "message": "",
+                        "timestamp": time.time()
+                    }
+
+                valid_keys = {str(code) for code in error_codes}
+                for stored_key in list(error_details.keys()):
+                    if stored_key not in valid_keys:
+                        error_details.pop(stored_key, None)
+
+                state_updates["error_details"] = error_details
             
             if state_updates:
                 await self.update_credential_state(credential_name, state_updates)

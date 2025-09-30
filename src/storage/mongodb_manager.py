@@ -187,6 +187,7 @@ class MongoDBManager:
         """获取默认状态数据"""
         return {
             "error_codes": [],
+            "error_details": {},
             "disabled": False,
             "last_success": time.time(),
             "user_email": None,
