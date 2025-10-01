@@ -1,4 +1,4 @@
-from typing import List, Optional, Union, Dict, Any
+from typing import List, Optional, Dict, Any
 
 from pydantic import BaseModel, Field
 
@@ -13,68 +13,6 @@ class ModelList(BaseModel):
     object: str = "list"
     data: List[Model]
 
-# OpenAI Models
-class OpenAIChatMessage(BaseModel):
-    role: str
-    content: Union[str, List[Dict[str, Any]], None] = None
-    reasoning_content: Optional[str] = None
-    name: Optional[str] = None
-
-class OpenAIChatCompletionRequest(BaseModel):
-    model: str
-    messages: List[OpenAIChatMessage]
-    stream: bool = False
-    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
-    top_p: Optional[float] = Field(None, ge=0.0, le=1.0)
-    max_tokens: Optional[int] = Field(None, ge=1)
-    stop: Optional[Union[str, List[str]]] = None
-    frequency_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0)
-    presence_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0)
-    n: Optional[int] = Field(1, ge=1, le=128)
-    seed: Optional[int] = None
-    response_format: Optional[Dict[str, Any]] = None
-    top_k: Optional[int] = Field(None, ge=1)
-    enable_anti_truncation: Optional[bool] = False
-    
-    class Config:
-        extra = "allow"  # Allow additional fields not explicitly defined
-
-# 通用的聊天完成请求模型（兼容OpenAI和其他格式）
-ChatCompletionRequest = OpenAIChatCompletionRequest
-
-class OpenAIChatCompletionChoice(BaseModel):
-    index: int
-    message: OpenAIChatMessage
-    finish_reason: Optional[str] = None
-    logprobs: Optional[Dict[str, Any]] = None
-
-class OpenAIChatCompletionResponse(BaseModel):
-    id: str
-    object: str = "chat.completion"
-    created: int
-    model: str
-    choices: List[OpenAIChatCompletionChoice]
-    usage: Optional[Dict[str, int]] = None
-    system_fingerprint: Optional[str] = None
-
-class OpenAIDelta(BaseModel):
-    role: Optional[str] = None
-    content: Optional[str] = None
-    reasoning_content: Optional[str] = None
-
-class OpenAIChatCompletionStreamChoice(BaseModel):
-    index: int
-    delta: OpenAIDelta
-    finish_reason: Optional[str] = None
-    logprobs: Optional[Dict[str, Any]] = None
-
-class OpenAIChatCompletionStreamResponse(BaseModel):
-    id: str
-    object: str = "chat.completion.chunk"
-    created: int
-    model: str
-    choices: List[OpenAIChatCompletionStreamChoice]
-    system_fingerprint: Optional[str] = None
 
 # Gemini Models
 class GeminiPart(BaseModel):
@@ -116,7 +54,6 @@ class GeminiRequest(BaseModel):
     tools: Optional[List[Dict[str, Any]]] = None
     toolConfig: Optional[Dict[str, Any]] = None
     cachedContent: Optional[str] = None
-    enable_anti_truncation: Optional[bool] = False
     
     class Config:
         extra = "allow"  # 允许透传未定义的字段

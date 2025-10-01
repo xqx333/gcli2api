@@ -37,11 +37,8 @@
 ### 🔄 API 端点和格式支持
 
 **多端点双格式支持**
-- **OpenAI 兼容端点**：`/v1/chat/completions` 和 `/v1/models`
-  - 支持标准 OpenAI 格式（messages 结构）
-  - 支持 Gemini 原生格式（contents 结构）
-  - 自动格式检测和转换，无需手动切换
-  - 支持多模态输入（文本 + 图像）
+- **OpenAI 兼容端点**：`/v1/models`
+  - 支持模型列表获取
 - **Gemini 原生端点**：`/v1/models/{model}:generateContent` 和 `streamGenerateContent`
   - 支持完整的 Gemini 原生 API 规范
   - 多种认证方式：Bearer Token、x-goog-api-key 头部、URL 参数 key
@@ -76,14 +73,9 @@
 
 **多种流式支持**
 - 真正的实时流式响应
-- 假流式模式（用于兼容性）
-- 流式抗截断功能（防止回答被截断）
 - 异步任务管理和超时处理
 
 **响应优化**
-- 思维链（Thinking）内容分离
-- 推理过程（reasoning_content）处理
-- 多轮对话上下文管理
 - 兼容性模式（将 system 消息转换为 user 消息）
 
 ### 🎛️ Web 管理控制台
@@ -127,7 +119,6 @@
 
 **性能和稳定性配置**
 - 429 错误自动重试（可配置间隔和次数）
-- 抗截断最大重试次数
 - 凭证轮换策略
 - 并发请求管理
 
@@ -169,13 +160,7 @@
 ### 🔍 搜索增强模型
 - `gemini-2.5-pro-search`：集成搜索功能的模型
 
-### 🌊 特殊功能变体
-- **假流式模式**：在任何模型名称后添加 `-假流式` 后缀
-  - 例：`gemini-2.5-pro-假流式`
-  - 用于需要流式响应但服务端不支持真流式的场景
-- **流式抗截断模式**：在模型名称前添加 `流式抗截断/` 前缀
-  - 例：`流式抗截断/gemini-2.5-pro`  
-  - 自动检测响应截断并重试，确保完整回答
+
 
 ### 🔧 模型功能自动检测
 - 系统自动识别模型名称中的功能标识
@@ -364,12 +349,10 @@ python web.py
 
 ### 高级特性实现
 
-**流式抗截断机制** (`src/anti_truncation.py`)
 - 检测响应截断模式
 - 自动重试和状态恢复
 - 上下文连接管理
 
-**格式检测和转换** (`src/format_detector.py`)
 - 自动检测请求格式（OpenAI vs Gemini）
 - 无缝格式转换
 - 参数映射和验证
@@ -395,7 +378,6 @@ python web.py
 - `RETRY_429_ENABLED`: 启用 429 错误自动重试（默认：true）
 - `RETRY_429_MAX_RETRIES`: 429 错误最大重试次数（默认：3）
 - `RETRY_429_INTERVAL`: 429 错误重试间隔，秒（默认：1.0）
-- `ANTI_TRUNCATION_MAX_ATTEMPTS`: 抗截断最大重试次数（默认：3）
 
 **网络和代理配置**
 - `PROXY`: HTTP/HTTPS 代理地址（格式：`http://host:port`）
@@ -630,10 +612,8 @@ curl -X POST "http://127.0.0.1:7861/v1/models/gemini-2.5-pro:streamGenerateConte
 }
 ```
 
-**流式抗截断使用**
 ```json
 {
-  "model": "流式抗截断/gemini-2.5-pro",
   "messages": [
     {"role": "user", "content": "写一篇长文章"}
   ],

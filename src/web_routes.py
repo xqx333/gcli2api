@@ -1287,8 +1287,6 @@ async def get_config(token: str = Depends(verify_token)):
         current_config["retry_429_interval"] = await config.get_retry_429_interval()
         
         
-        # 抗截断配置
-        current_config["anti_truncation_max_attempts"] = await config.get_anti_truncation_max_attempts()
         
         # 兼容性配置
         current_config["compatibility_mode_enabled"] = await config.get_compatibility_mode_enabled()
@@ -1307,8 +1305,6 @@ async def get_config(token: str = Depends(verify_token)):
             env_locked.append("retry_429_enabled")
         if os.getenv("RETRY_429_INTERVAL"):
             env_locked.append("retry_429_interval")
-        if os.getenv("ANTI_TRUNCATION_MAX_ATTEMPTS"):
-            env_locked.append("anti_truncation_max_attempts")
         if os.getenv("COMPATIBILITY_MODE"):
             env_locked.append("compatibility_mode_enabled")
         if os.getenv("HOST"):
@@ -1405,9 +1401,6 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_to
 
             new_config["auto_ban_keywords"] = sanitized_mapping
 
-        if "anti_truncation_max_attempts" in new_config:
-            if not isinstance(new_config["anti_truncation_max_attempts"], int) or new_config["anti_truncation_max_attempts"] < 1 or new_config["anti_truncation_max_attempts"] > 10:
-                raise HTTPException(status_code=400, detail="抗截断最大重试次数必须是1-10之间的整数")
         
         if "compatibility_mode_enabled" in new_config:
             if not isinstance(new_config["compatibility_mode_enabled"], bool):
@@ -1468,8 +1461,6 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_to
             env_locked_keys.add("retry_429_enabled")
         if os.getenv("RETRY_429_INTERVAL"):
             env_locked_keys.add("retry_429_interval")
-        if os.getenv("ANTI_TRUNCATION_MAX_ATTEMPTS"):
-            env_locked_keys.add("anti_truncation_max_attempts")
         if os.getenv("COMPATIBILITY_MODE"):
             env_locked_keys.add("compatibility_mode_enabled")
         if os.getenv("HOST"):
@@ -1517,7 +1508,6 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_to
         # - log_level: 日志级别
         # - auto_ban_enabled, auto_ban_error_codes: 自动封禁配置
         # - retry_429_enabled, retry_429_max_retries, retry_429_interval: 429重试配置
-        # - anti_truncation_max_attempts: 抗截断配置
         # - compatibility_mode_enabled: 兼容性模式
         # - api_password, panel_password, password: 访问密码
         #
@@ -1549,7 +1539,6 @@ async def save_config(request: ConfigSaveRequest, token: str = Depends(verify_to
                 "auto_ban_enabled", "auto_ban_error_codes",
                 "auto_ban_keywords",
                 "retry_429_enabled", "retry_429_max_retries", "retry_429_interval",
-                "anti_truncation_max_attempts", "compatibility_mode_enabled"
             ]
             
             for config_key in hot_updatable_configs:

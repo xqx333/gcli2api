@@ -1140,22 +1140,16 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                         </div>
 
                         <div class="card">
-                            <h4 style="margin-top: 0; margin-bottom: 15px;">抗截断配置</h4>
 
                             <div class="form-group">
-                                <label for="antiTruncationMaxAttempts">抗截断最大重试次数:</label>
-                                <input type="number" id="antiTruncationMaxAttempts" min="1" max="10" />
                                 <small
                                     style="display: block; color: #666; font-size: 12px; margin-top: 5px;">当检测到输出截断时的最大续传尝试次数</small>
                             </div>
 
                             <div
                                 style="background-color: #e3f2fd; border: 1px solid #1976d2; border-radius: 6px; padding: 12px; margin-top: 8px; font-size: 13px; color: #1565c0;">
-                                <strong>注意：</strong>抗截断功能现在通过模型名控制：
                                 <ul style="margin: 5px 0; padding-left: 20px; color: #424242;">
-                                    <li>选择带有 "-流式抗截断" 后缀的模型即可启用</li>
                                     <li>该功能仅在流式传输时生效</li>
-                                    <li>例如: "gemini-2.5-pro-流式抗截断"</li>
                                 </ul>
                             </div>
                         </div>
@@ -1170,7 +1164,6 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                                     <li><strong>网络配置：</strong>代理、端点配置、超时、连接数</li>
                                     <li><strong>API配置：</strong>轮换次数、重试设置、自动封禁</li>
                                     <li><strong>密码配置：</strong>API密码、面板密码</li>
-                                    <li><strong>功能配置：</strong>抗截断重试次数</li>
                                 </ul>
                             </div>
 
@@ -3067,8 +3060,6 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
             // 兼容性配置
             setCheckboxValue('compatibilityModeEnabled', config.compatibility_mode_enabled);
 
-            // 抗截断配置
-            setFieldValue('antiTruncationMaxAttempts', config.anti_truncation_max_attempts);
 
             // 标记环境变量锁定的字段
             markEnvLockedFields();
@@ -3111,7 +3102,6 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                 'retry429Enabled': 'retry_429_enabled',
                 'retry429MaxRetries': 'retry_429_max_retries',
                 'retry429Interval': 'retry_429_interval',
-                'antiTruncationMaxAttempts': 'anti_truncation_max_attempts'
             };
 
             for (const [fieldId, configKey] of Object.entries(fieldMapping)) {
@@ -3167,7 +3157,6 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
 
 
                 compatibility_mode_enabled: document.getElementById('compatibilityModeEnabled').checked,
-                anti_truncation_max_attempts: parseInt(document.getElementById('antiTruncationMaxAttempts').value) || null
             };
 
             // 处理自动封禁错误码（转换为数组）
@@ -3198,7 +3187,6 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                 'retry_429_enabled': 'retry429Enabled',
                 'retry_429_max_retries': 'retry429MaxRetries',
                 'retry_429_interval': 'retry429Interval',
-                'anti_truncation_max_attempts': 'antiTruncationMaxAttempts'
             };
 
             const filteredConfig = {};

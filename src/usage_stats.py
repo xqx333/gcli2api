@@ -12,7 +12,6 @@ from typing import Dict, Any, Optional
 from log import log
 from .storage_adapter import get_storage_adapter
 
-
 def _get_next_utc_7am() -> datetime:
     """Calculate the next UTC 07:00 time for quota reset."""
     now = datetime.now(timezone.utc)
@@ -20,7 +19,6 @@ def _get_next_utc_7am() -> datetime:
     if now < today_7am:
         return today_7am
     return today_7am + timedelta(days=1)
-
 
 def _normalize_filename(filename: str) -> str:
     """Normalize filename to relative path for consistent storage."""
@@ -30,32 +28,21 @@ def _normalize_filename(filename: str) -> str:
         return filename
     return os.path.basename(filename)
 
-
 def _is_gemini_2_5_pro(model_name: str) -> bool:
-    """Check if model is gemini-2.5-pro variant (including prefixes and suffixes)."""
+    """Check if model is gemini-2.5-pro variant (including suffix modifiers)."""
     if not model_name:
         return False
 
     try:
-        from config import get_base_model_name, get_base_model_from_feature_model
-
-        base_with_suffix = get_base_model_from_feature_model(model_name)
-        pure_base_model = get_base_model_name(base_with_suffix)
-        return pure_base_model == "gemini-2.5-pro"
+        from config import get_base_model_name
+        return get_base_model_name(model_name) == "gemini-2.5-pro"
     except ImportError:
         clean_model = model_name
-        for prefix in ["流式抗截断", "假流式"]:
-            if clean_model.startswith(prefix):
-                clean_model = clean_model[len(prefix):]
-                break
-
         for suffix in ["-maxthinking", "-nothinking", "-search"]:
             if clean_model.endswith(suffix):
                 clean_model = clean_model[:-len(suffix)]
                 break
-
         return clean_model == "gemini-2.5-pro"
-
 
 class UsageStats:
     """Lightweight usage statistics manager that loads and persists per file on demand."""
@@ -318,9 +305,7 @@ class UsageStats:
 
         log.info("Reset usage statistics for all credential files")
 
-
 _usage_stats_instance: Optional[UsageStats] = None
-
 
 async def get_usage_stats_instance() -> UsageStats:
     """Get the global usage statistics instance."""
@@ -330,18 +315,15 @@ async def get_usage_stats_instance() -> UsageStats:
         await _usage_stats_instance.initialize()
     return _usage_stats_instance
 
-
 async def record_successful_call(filename: str, model_name: str):
     """Convenience function to record a successful API call."""
     stats = await get_usage_stats_instance()
     await stats.record_successful_call(filename, model_name)
 
-
 async def get_usage_stats(filename: str = None) -> Dict[str, Any]:
     """Convenience function to get usage statistics."""
     stats = await get_usage_stats_instance()
     return await stats.get_usage_stats(filename)
-
 
 async def get_aggregated_stats() -> Dict[str, Any]:
     """Convenience function to get aggregated statistics."""

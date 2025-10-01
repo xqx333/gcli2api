@@ -75,7 +75,6 @@ This is a strict anti-commercial open source license. Please refer to the [LICEN
 **Multiple Streaming Support**
 - True real-time streaming responses
 - Fake streaming mode (for compatibility)
-- Streaming anti-truncation feature (prevents answer truncation)
 - Asynchronous task management and timeout handling
 
 **Response Optimization**
@@ -125,7 +124,6 @@ This is a strict anti-commercial open source license. Please refer to the [LICEN
 
 **Performance and Stability Configuration**
 - 429 error automatic retry (configurable interval and attempts)
-- Anti-truncation maximum retry attempts
 - Credential rotation strategy
 - Concurrent request management
 
@@ -167,12 +165,7 @@ All models have 1M context window capacity. Each credential file provides 1000 r
 ### 🔍 Search-Enhanced Models
 - `gemini-2.5-pro-search`: Model with integrated search functionality
 
-### 🌊 Special Feature Variants
-- **Fake Streaming Mode**: Add `-假流式` suffix to any model name
-  - Example: `gemini-2.5-pro-假流式`
   - For scenarios requiring streaming responses but server doesn't support true streaming
-- **Streaming Anti-truncation Mode**: Add `流式抗截断/` prefix to model name
-  - Example: `流式抗截断/gemini-2.5-pro`  
   - Automatically detects response truncation and retries to ensure complete answers
 
 ### 🔧 Automatic Model Feature Detection
@@ -373,12 +366,10 @@ MongoDB support has been removed. Please use Redis for distributed storage.
 
 ### Advanced Feature Implementation
 
-**Streaming Anti-truncation Mechanism** (`src/anti_truncation.py`)
 - Response truncation pattern detection
 - Automatic retry and state recovery
 - Context connection management
 
-**Format Detection and Conversion** (`src/format_detector.py`)
 - Automatic request format detection (OpenAI vs Gemini)
 - Seamless format conversion
 - Parameter mapping and validation
@@ -404,7 +395,6 @@ MongoDB support has been removed. Please use Redis for distributed storage.
 - `RETRY_429_ENABLED`: Enable 429 error automatic retry (default: true)
 - `RETRY_429_MAX_RETRIES`: Maximum retry attempts for 429 errors (default: 3)
 - `RETRY_429_INTERVAL`: Retry interval for 429 errors, in seconds (default: 1.0)
-- `ANTI_TRUNCATION_MAX_ATTEMPTS`: Maximum retry attempts for anti-truncation (default: 3)
 
 **Network and Proxy Configuration**
 - `PROXY`: HTTP/HTTPS proxy address (format: `http://host:port`)
@@ -639,10 +629,8 @@ Response will include separated thinking content:
 }
 ```
 
-**Streaming Anti-truncation Usage**
 ```json
 {
-  "model": "流式抗截断/gemini-2.5-pro",
   "messages": [
     {"role": "user", "content": "Write a long article"}
   ],

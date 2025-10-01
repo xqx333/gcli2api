@@ -2,32 +2,17 @@
 Gemini Router - Handles native Gemini format API requests
 处理原生Gemini格式请求的路由模块
 """
-import asyncio
-import json
 from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Request, Path, Query, status, Header
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from config import get_available_models, is_fake_streaming_model, is_anti_truncation_model, get_base_model_from_feature_model, get_anti_truncation_max_attempts, get_base_model_name
+from config import get_available_models, get_base_model_name
 from log import log
-from .anti_truncation import apply_anti_truncation_to_stream
 from .credential_manager import CredentialManager
 from .google_chat_api import send_gemini_request, build_gemini_payload_from_native
-from .task_manager import create_managed_task
-# 从Gemini响应parts中提取普通内容与推理内容
-def _extract_content_and_reasoning(parts: list) -> tuple:
-    content = ""
-    reasoning_content = ""
-    for part in parts:
-        if part.get("text"):
-            if part.get("thought", False):
-                reasoning_content += part.get("text", "")
-            else:
-                content += part.get("text", "")
-    return content, reasoning_content
 # 创建路由器
 router = APIRouter()
 security = HTTPBearer()
@@ -101,7 +86,7 @@ async def list_gemini_models():
     gemini_models = []
     for model_name in models:
         # 获取基础模型名
-        base_model = get_base_model_from_feature_model(model_name)
+        base_model = get_base_model_name(model_name)
         
         model_info = {
             "name": f"models/{model_name}",
@@ -162,19 +147,13 @@ async def generate_content(
         # request_data["generationConfig"] = {"topK": 64}
         pass
     
-    # 处理模型名称和功能检测
-    use_anti_truncation = is_anti_truncation_model(model)
+    # 处理模型名称
     
     # 获取基础模型名
-    real_model = get_base_model_from_feature_model(model)
+    real_model = get_base_model_name(model)
     
-    # 对于假流式模型，如果是流式端点才返回假流式响应
-    # 注意：这是generateContent端点，不应该触发假流式
     
-    # 对于抗截断模型的非流式请求，给出警告
-    if use_anti_truncation:
-        log.warning("抗截断功能仅在流式传输时有效，非流式请求将忽略此设置")
-    
+
     # 健康检查
     if (len(request_data["contents"]) == 1 and 
         request_data["contents"][0].get("role") == "user" and
@@ -262,17 +241,12 @@ async def stream_generate_content(
         # request_data["generationConfig"] = {"topK": 64}
         pass
     
-    # 处理模型名称和功能检测
-    use_fake_streaming = is_fake_streaming_model(model)
-    use_anti_truncation = is_anti_truncation_model(model)
+    # 处理模型名称
     
     # 获取基础模型名
-    real_model = get_base_model_from_feature_model(model)
+    real_model = get_base_model_name(model)
     
-    # 对于假流式模型，返回假流式响应
-    if use_fake_streaming:
-        return await fake_stream_response_gemini(request_data, real_model)
-    
+
     # 获取凭证管理器
     from src.credential_manager import get_credential_manager
     cred_mgr = await get_credential_manager()
@@ -293,17 +267,7 @@ async def stream_generate_content(
         log.error(f"Gemini payload build failed: {e}")
         raise HTTPException(status_code=500, detail="Request processing failed")
     
-    # 处理抗截断功能（仅流式传输时有效）
-    if use_anti_truncation:
-        log.info("启用流式抗截断功能")
-        # 使用流式抗截断处理器
-        max_attempts = await get_anti_truncation_max_attempts()
-        return await apply_anti_truncation_to_stream(
-            lambda payload: send_gemini_request(payload, True, cred_mgr),
-            api_payload,
-            max_attempts
-        )
-    
+
     # 常规流式请求（429重试已在google_api_client中处理）
     response = await send_gemini_request(api_payload, True, cred_mgr)
     
@@ -389,190 +353,3 @@ async def get_model_info(
     
     return JSONResponse(content=model_info)
 
-async def fake_stream_response_gemini(request_data: dict, model: str):
-    """处理Gemini格式的假流式响应"""
-    
-    async def gemini_stream_generator():
-        try:
-            # 获取凭证管理器
-            from src.credential_manager import get_credential_manager
-            cred_mgr = await get_credential_manager()
-            
-            # 获取有效凭证
-            credential_result = await cred_mgr.get_valid_credential()
-            if not credential_result:
-                log.error("当前无可用凭证，请去控制台获取")
-                error_chunk = {
-                    "error": {
-                        "message": "当前无凭证，请去控制台获取",
-                        "type": "authentication_error",
-                        "code": 500
-                    }
-                }
-                yield f"data: {json.dumps(error_chunk)}\n\n".encode()
-                yield "data: [DONE]\n\n".encode()
-                return
-            
-            # 增加调用计数
-            cred_mgr.increment_call_count()
-            
-            # 构建Google API payload
-            try:
-                api_payload = build_gemini_payload_from_native(request_data, model)
-            except Exception as e:
-                log.error(f"Gemini payload build failed: {e}")
-                error_chunk = {
-                    "error": {
-                        "message": f"Request processing failed: {str(e)}",
-                        "type": "api_error",
-                        "code": 500
-                    }
-                }
-                yield f"data: {json.dumps(error_chunk)}\n\n".encode()
-                yield "data: [DONE]\n\n".encode()
-                return
-            
-            # 发送心跳
-            heartbeat = {
-                "candidates": [{
-                    "content": {
-                        "parts": [{"text": ""}],
-                        "role": "model"
-                    },
-                    "finishReason": None,
-                    "index": 0
-                }]
-            }
-            yield f"data: {json.dumps(heartbeat)}\n\n".encode()
-            
-            # 异步发送实际请求
-            async def get_response():
-                return await send_gemini_request(api_payload, False, cred_mgr)
-            
-            # 创建请求任务
-            response_task = create_managed_task(get_response(), name="gemini_fake_stream_request")
-            
-            try:
-                # 每3秒发送一次心跳，直到收到响应
-                while not response_task.done():
-                    await asyncio.sleep(3.0)
-                    if not response_task.done():
-                        yield f"data: {json.dumps(heartbeat)}\n\n".encode()
-                
-                # 获取响应结果
-                response = await response_task
-
-            except asyncio.CancelledError:
-                # 取消任务并传播取消
-                response_task.cancel()
-                try:
-                    await response_task
-                except asyncio.CancelledError:
-                    pass
-                raise
-            except Exception as e:
-                # 取消任务并处理其他异常
-                response_task.cancel()
-                try:
-                    await response_task
-                except asyncio.CancelledError:
-                    pass
-                log.error(f"Fake streaming request failed: {e}")
-                raise
-
-            # 发送实际请求
-            # response 已在上面获取
-
-            # 处理结果
-            try:
-                if hasattr(response, 'body'):
-                    response_data = json.loads(response.body.decode() if isinstance(response.body, bytes) else response.body)
-                elif hasattr(response, 'content'):
-                    response_data = json.loads(response.content.decode() if isinstance(response.content, bytes) else response.content)
-                else:
-                    response_data = json.loads(str(response))
-                
-                log.debug(f"Gemini fake stream response data: {response_data}")
-                
-                # 发送完整内容作为单个chunk，使用思维链分离
-                if "candidates" in response_data and response_data["candidates"]:
-                    candidate = response_data["candidates"][0]
-                    if "content" in candidate and "parts" in candidate["content"]:
-                        parts = candidate["content"]["parts"]
-                        content, reasoning_content = _extract_content_and_reasoning(parts)
-                        log.debug(f"Gemini extracted content: {content}")
-                        log.debug(f"Gemini extracted reasoning: {reasoning_content[:100] if reasoning_content else 'None'}...")
-                        
-                        # 如果没有正常内容但有思维内容
-                        if not content and reasoning_content:
-                            log.warning(f"Gemini fake stream contains only thinking content: {reasoning_content[:100]}...")
-                            content = "[模型正在思考中，请稍后再试或重新提问]"
-                        
-                        if content:
-                            # 构建包含分离内容的响应
-                            parts_response = [{"text": content}]
-                            if reasoning_content:
-                                parts_response.append({"text": reasoning_content, "thought": True})
-                            
-                            content_chunk = {
-                                "candidates": [{
-                                    "content": {
-                                        "parts": parts_response,
-                                        "role": "model"
-                                    },
-                                    "finishReason": candidate.get("finishReason", "STOP"),
-                                    "index": 0
-                                }]
-                            }
-                            yield f"data: {json.dumps(content_chunk)}\n\n".encode()
-                        else:
-                            log.warning(f"No content found in Gemini candidate: {candidate}")
-                            # 提供默认回复
-                            error_chunk = {
-                                "candidates": [{
-                                    "content": {
-                                        "parts": [{"text": "[响应为空，请重新尝试]"}],
-                                        "role": "model"
-                                    },
-                                    "finishReason": "STOP",
-                                    "index": 0
-                                }]
-                            }
-                            yield f"data: {json.dumps(error_chunk)}\n\n".encode()
-                    else:
-                        log.warning(f"No content/parts found in Gemini candidate: {candidate}")
-                        # 返回原始响应
-                        yield f"data: {json.dumps(response_data)}\n\n".encode()
-                else:
-                    log.warning(f"No candidates found in Gemini response: {response_data}")
-                    yield f"data: {json.dumps(response_data)}\n\n".encode()
-                
-            except Exception as e:
-                log.error(f"Response parsing failed: {e}")
-                error_chunk = {
-                    "candidates": [{
-                        "content": {
-                            "parts": [{"text": f"Response parsing error: {str(e)}"}],
-                            "role": "model"
-                        },
-                        "finishReason": "ERROR",
-                        "index": 0
-                    }]
-                }
-                yield f"data: {json.dumps(error_chunk)}\n\n".encode()
-            
-            yield "data: [DONE]\n\n".encode()
-                
-        except Exception as e:
-            log.error(f"Fake streaming error: {e}")
-            error_chunk = {
-                "error": {
-                    "message": f"Fake streaming error: {str(e)}",
-                    "type": "api_error", 
-                    "code": 500
-                }
-            }
-            yield f"data: {json.dumps(error_chunk)}\n\n".encode()
-            yield "data: [DONE]\n\n".encode()
-
-    return StreamingResponse(gemini_stream_generator(), media_type="text/event-stream")

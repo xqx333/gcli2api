@@ -9,6 +9,7 @@ from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from src.openai_router import router as openai_router
 # Import routers (Gemini native + Web interface)
 from src.gemini_router import router as gemini_router
 from src.web_routes import router as web_router
@@ -97,7 +98,12 @@ app.add_middleware(
 )
 
 # 挂载路由器
- 
+ # OpenAI兼容路由 - 处理OpenAI格式请求模型列表
+app.include_router(
+    openai_router,
+    prefix="",
+    tags=["OpenAI Models Compatible API"]
+)
 
 # Gemini原生路由 - 处理Gemini格式请求
 app.include_router(
@@ -132,8 +138,7 @@ async def main():
     """异步主启动函数"""
     from hypercorn.asyncio import serve
     from hypercorn.config import Config
-    
-    # 日志系统现在直接使用环境变量，无需初始化
+
     
     # 从环境变量或配置获取端口和主机
     port = await get_server_port()
@@ -145,6 +150,7 @@ async def main():
     log.info(f"控制面板: http://127.0.0.1:{port}")
     log.info("=" * 60)
     log.info("API端点:")
+    log.info(f"   OpenAI兼容: http://127.0.0.1:{port}/v1")
     log.info(f"   Gemini原生: http://127.0.0.1:{port}")
 
     # 配置hypercorn

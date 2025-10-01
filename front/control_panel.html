@@ -1598,28 +1598,6 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                         </div>
 
                         <div class="config-group">
-                            <h4>抗截断配置</h4>
-
-                            <div class="form-group">
-                                <label for="antiTruncationMaxAttempts">抗截断最大重试次数:</label>
-                                <input type="number" id="antiTruncationMaxAttempts" class="config-input" min="1"
-                                    max="10" />
-                                <small class="config-note">当检测到输出截断时的最大续传尝试次数</small>
-                            </div>
-
-                            <div class="form-group">
-                                <div class="config-info">
-                                    <strong>注意：</strong>抗截断功能现在通过模型名控制：
-                                    <ul style="margin: 5px 0; padding-left: 20px;">
-                                        <li>选择带有 "-流式抗截断" 后缀的模型即可启用</li>
-                                        <li>该功能仅在流式传输时生效</li>
-                                        <li>例如: "gemini-2.5-pro-流式抗截断"</li>
-                                    </ul>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="config-group">
                             <h4>配置热更新说明</h4>
 
                             <div class="form-group">
@@ -1630,7 +1608,6 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                                         <li><strong>网络配置：</strong>代理设置、端点配置、HTTP超时时间、最大连接数</li>
                                         <li><strong>API配置：</strong>凭证轮换次数、429重试设置、自动封禁配置</li>
                                         <li><strong>密码配置：</strong>API密码、控制面板密码、通用密码</li>
-                                        <li><strong>功能配置：</strong>抗截断最大重试次数</li>
                                     </ul>
                                 </div>
                             </div>
@@ -3257,8 +3234,6 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
             // 兼容性配置
             document.getElementById('compatibilityModeEnabled').checked = Boolean(currentConfig.compatibility_mode_enabled);
 
-            // 抗截断配置
-            setConfigField('antiTruncationMaxAttempts', currentConfig.anti_truncation_max_attempts || 3);
         }
 
         function setConfigField(fieldId, value) {
@@ -3337,9 +3312,7 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                     retry_429_max_retries: retry429MaxRetries,
                     retry_429_interval: retry429Interval,
                     // 兼容性配置
-                    compatibility_mode_enabled: document.getElementById('compatibilityModeEnabled').checked,
-                    // 抗截断配置
-                    anti_truncation_max_attempts: parseInt(document.getElementById('antiTruncationMaxAttempts').value) || 3
+                    compatibility_mode_enabled: document.getElementById('compatibilityModeEnabled').checked
                 };
 
                 const response = await fetch('/config/save', {
