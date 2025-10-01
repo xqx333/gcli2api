@@ -9,8 +9,7 @@ from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-# Import all routers
-from src.openai_router import router as openai_router
+# Import routers (Gemini native + Web interface)
 from src.gemini_router import router as gemini_router
 from src.web_routes import router as web_router
 
@@ -83,7 +82,7 @@ async def lifespan(app: FastAPI):
 # 创建FastAPI应用
 app = FastAPI(
     title="GCLI2API",
-    description="Gemini API proxy with OpenAI compatibility",
+    description="Gemini API proxy (Gemini native only)",
     version="2.0.0",
     lifespan=lifespan
 )
@@ -98,12 +97,7 @@ app.add_middleware(
 )
 
 # 挂载路由器
-# OpenAI兼容路由 - 处理OpenAI格式请求
-app.include_router(
-    openai_router,
-    prefix="",
-    tags=["OpenAI Compatible API"]
-)
+ 
 
 # Gemini原生路由 - 处理Gemini格式请求
 app.include_router(
@@ -151,7 +145,6 @@ async def main():
     log.info(f"控制面板: http://127.0.0.1:{port}")
     log.info("=" * 60)
     log.info("API端点:")
-    log.info(f"   OpenAI兼容: http://127.0.0.1:{port}/v1")
     log.info(f"   Gemini原生: http://127.0.0.1:{port}")
 
     # 配置hypercorn
