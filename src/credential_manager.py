@@ -437,8 +437,8 @@ class CredentialManager:
             if success:
                 state_updates["last_success"] = time.time()
                 # 清除错误码（如果之前有的话）
-                state_updates["error_codes"] = []
-                state_updates["error_details"] = {}
+                # state_updates["error_codes"] = []
+                # state_updates["error_details"] = {}
             elif error_code:
                 # 记录错误码
                 current_state = await self._storage_adapter.get_credential_state(credential_name)
