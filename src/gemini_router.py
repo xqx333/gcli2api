@@ -131,43 +131,8 @@ async def generate_content(
     if "contents" not in request_data or not request_data["contents"]:
         raise HTTPException(status_code=400, detail="Missing required field: contents")
     
-    # 请求预处理：限制参数
-    if "generationConfig" in request_data and request_data["generationConfig"]:
-        generation_config = request_data["generationConfig"]
-        
-        # 限制max_tokens (在Gemini中叫maxOutputTokens)
-        if "maxOutputTokens" in generation_config and generation_config["maxOutputTokens"] is not None:
-            if generation_config["maxOutputTokens"] > 65535:
-                generation_config["maxOutputTokens"] = 65535
-                
-        # 覆写 top_k 为 64 (在Gemini中叫topK)
-        # generation_config["topK"] = 64
-    else:
-        # 如果没有generationConfig，创建一个并设置topK
-        # request_data["generationConfig"] = {"topK": 64}
-        pass
-    
-    # 处理模型名称
-    
     # 获取基础模型名
     real_model = get_base_model_name(model)
-    
-    
-
-    # 健康检查
-    if (len(request_data["contents"]) == 1 and 
-        request_data["contents"][0].get("role") == "user" and
-        request_data["contents"][0].get("parts", [{}])[0].get("text") == "Hi"):
-        return JSONResponse(content={
-            "candidates": [{
-                "content": {
-                    "parts": [{"text": "工作中"}],
-                    "role": "model"
-                },
-                "finishReason": "STOP",
-                "index": 0
-            }]
-        })
     
     # 获取凭证管理器
     from src.credential_manager import get_credential_manager
@@ -225,23 +190,6 @@ async def stream_generate_content(
     if "contents" not in request_data or not request_data["contents"]:
         raise HTTPException(status_code=400, detail="Missing required field: contents")
     
-    # 请求预处理：限制参数
-    if "generationConfig" in request_data and request_data["generationConfig"]:
-        generation_config = request_data["generationConfig"]
-        
-        # 限制max_tokens (在Gemini中叫maxOutputTokens)
-        if "maxOutputTokens" in generation_config and generation_config["maxOutputTokens"] is not None:
-            if generation_config["maxOutputTokens"] > 65535:
-                generation_config["maxOutputTokens"] = 65535
-                
-        # 覆写 top_k 为 64 (在Gemini中叫topK)
-        # generation_config["topK"] = 64
-    else:
-        # 如果没有generationConfig，创建一个并设置topK
-        # request_data["generationConfig"] = {"topK": 64}
-        pass
-    
-    # 处理模型名称
     
     # 获取基础模型名
     real_model = get_base_model_name(model)
@@ -273,83 +221,4 @@ async def stream_generate_content(
     
     # 直接返回流式响应
     return response
-    
-@router.post("/v1/v1beta/models/{model:path}:countTokens")
-@router.post("/v1/v1/models/{model:path}:countTokens")
-@router.post("/v1beta/models/{model:path}:countTokens")
-@router.post("/v1/models/{model:path}:countTokens")
-async def count_tokens(
-    request: Request = None,
-    api_key: str = Depends(authenticate_gemini_flexible)
-):
-    """模拟Gemini格式的token计数"""
-    
-    try:
-        request_data = await request.json()
-    except Exception as e:
-        log.error(f"Failed to parse JSON request: {e}")
-        raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
-    
-    # 简单的token计数模拟 - 基于文本长度估算
-    total_tokens = 0
-    
-    # 如果有contents字段
-    if "contents" in request_data:
-        for content in request_data["contents"]:
-            if "parts" in content:
-                for part in content["parts"]:
-                    if "text" in part:
-                        # 简单估算：大约4字符=1token
-                        text_length = len(part["text"])
-                        total_tokens += max(1, text_length // 4)
-    
-    # 如果有generateContentRequest字段
-    elif "generateContentRequest" in request_data:
-        gen_request = request_data["generateContentRequest"]
-        if "contents" in gen_request:
-            for content in gen_request["contents"]:
-                if "parts" in content:
-                    for part in content["parts"]:
-                        if "text" in part:
-                            text_length = len(part["text"])
-                            total_tokens += max(1, text_length // 4)
-    
-    # 返回Gemini格式的响应
-    return JSONResponse(content={
-        "totalTokens": total_tokens
-    })
-
-@router.get("/v1/v1beta/models/{model:path}")
-@router.get("/v1/v1/models/{model:path}")
-@router.get("/v1beta/models/{model:path}")
-@router.get("/v1/models/{model:path}")
-async def get_model_info(
-    model: str = Path(..., description="Model name"),
-    api_key: str = Depends(authenticate_gemini_flexible)
-):
-    """获取特定模型的信息"""
-    
-    # 获取基础模型名称
-    base_model = get_base_model_name(model)
-    
-    # 模拟模型信息
-    model_info = {
-        "name": f"models/{base_model}",
-        "baseModelId": base_model,
-        "version": "001",
-        "displayName": base_model,
-        "description": f"Gemini {base_model} model",
-        "inputTokenLimit": 128000,
-        "outputTokenLimit": 8192,
-        "supportedGenerationMethods": [
-            "generateContent",
-            "streamGenerateContent"
-        ],
-        "temperature": 1.0,
-        "maxTemperature": 2.0,
-        "topP": 0.95,
-        "topK": 64
-    }
-    
-    return JSONResponse(content=model_info)
 

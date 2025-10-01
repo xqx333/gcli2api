@@ -584,6 +584,23 @@ def build_gemini_payload_from_native(native_request: dict, model_from_path: str)
     # 应用默认安全设置（如果未指定）
     if "safetySettings" not in request_data:
         request_data["safetySettings"] = DEFAULT_SAFETY_SETTINGS
+
+
+    # 限制参数
+    if "generationConfig" in request_data and request_data["generationConfig"]:
+        generation_config = request_data["generationConfig"]
+        
+        # 限制max_tokens (在Gemini中叫maxOutputTokens)
+        if "maxOutputTokens" in generation_config and generation_config["maxOutputTokens"] is not None:
+            if generation_config["maxOutputTokens"] > 65535:
+                generation_config["maxOutputTokens"] = 65535
+                
+        # 覆写 top_k 为 64 (在Gemini中叫topK)
+        # generation_config["topK"] = 64
+    else:
+        # 如果没有generationConfig，创建一个并设置topK
+        # request_data["generationConfig"] = {"topK": 64}
+        pass
     
     # 确保generationConfig存在
     if "generationConfig" not in request_data:
