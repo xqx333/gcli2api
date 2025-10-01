@@ -296,18 +296,18 @@ docker run -d --name gcli2api --network host -e API_PASSWORD=api_pwd -e PANEL_PA
 
 ### 🌟 存储后端优先级
 
-gcli2api 支持多种存储后端，按优先级自动选择：**Redis > Postgres > MongoDB > 本地文件**
+gcli2api 支持存储后端：**Redis > 本地文件**
 
 ### ⚡ Redis 分布式存储模式
 
-### ⚙️ 启用 Redis 模式
+配置 Redis 连接后，应用将自动启用分布式存储，支持多节点部署和数据共享。
 
-**步骤 1: 配置 Redis 连接**
+**配置示例：**
 ```bash
 # 本地 Redis
 export REDIS_URI="redis://localhost:6379"
 
-# 带密码的 Redis
+# 带密码的 Redis  
 export REDIS_URI="redis://:password@localhost:6379"
 
 # SSL 连接（推荐生产环境）
@@ -318,128 +318,9 @@ export REDIS_URI="rediss://default:token@your-host.upstash.io:6379"
 
 # 可选：自定义数据库索引（默认: 0）
 export REDIS_DATABASE="1"
-```
 
-**步骤 2: 启动应用**
-```bash
-# 应用会自动检测 Redis 配置并优先使用 Redis 存储
+# 启动应用
 python web.py
-```
-
-### 🐘 Postgres 分布式存储模式
-
-如果未配置 Redis，或者你希望使用关系型数据库作为主要存储方案，gcli2api 也支持 Postgres（位于 Redis 之后，优先于 MongoDB）。
-
-⚙️ 启用 Postgres 模式
-
-步骤 1: 配置 Postgres 连接
-```bash
-# 使用标准 DSN（示例）
-export POSTGRES_DSN="postgresql://user:password@localhost:5432/gcli2api"
-
-# 也可以使用 socket 或其他 DSN 格式，取决于你的部署方式
-```
-
-步骤 2: 启动应用
-```bash
-# 应用会自动检测 POSTGRES_DSN 并在 Redis 未启用时优先使用 Postgres 存储
-python web.py
-```
-
-### 🍃 MongoDB 分布式存储模式
-
-### 🌟 备选存储方案
-
-如果未配置 Redis，gcli2api 将尝试使用 **MongoDB 存储模式**，
-
-### ⚙️ 启用 MongoDB 模式
-
-**步骤 1: 配置 MongoDB 连接**
-```bash
-# 本地 MongoDB
-export MONGODB_URI="mongodb://localhost:27017"
-
-# MongoDB Atlas 云服务
-export MONGODB_URI="mongodb+srv://username:password@cluster.mongodb.net"
-
-# 带认证的 MongoDB
-export MONGODB_URI="mongodb://admin:password@localhost:27017/admin"
-
-# 可选：自定义数据库名称（默认: gcli2api）
-export MONGODB_DATABASE="my_gcli_db"
-```
-
-**步骤 2: 启动应用**
-```bash
-# 应用会自动检测 MongoDB 配置并使用 MongoDB 存储
-python web.py
-```
-
-**Docker 环境使用 MongoDB**
-```bash
-# 单机 MongoDB 部署
-docker run -d --name gcli2api \
-  -e MONGODB_URI="mongodb://mongodb:27017" \
-  -e API_PASSWORD=your_password \
-  --network your_network \
-  ghcr.io/su-kaka/gcli2api:latest
-
-# 使用 MongoDB Atlas
-docker run -d --name gcli2api \
-  -e MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/gcli2api" \
-  -e API_PASSWORD=your_password \
-  -p 7861:7861 \
-  ghcr.io/su-kaka/gcli2api:latest
-```
-
-**Docker Compose 示例**
-```yaml
-version: '3.8'
-
-services:
-  mongodb:
-    image: mongo:7
-    container_name: gcli2api-mongodb
-    restart: unless-stopped
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: password123
-    volumes:
-      - mongodb_data:/data/db
-    ports:
-      - "27017:27017"
-
-  gcli2api:
-    image: ghcr.io/su-kaka/gcli2api:latest
-    container_name: gcli2api
-    restart: unless-stopped
-    depends_on:
-      - mongodb
-    environment:
-      - MONGODB_URI=mongodb://admin:password123@mongodb:27017/admin
-      - MONGODB_DATABASE=gcli2api
-      - API_PASSWORD=your_api_password
-      - PORT=7861
-    ports:
-      - "7861:7861"
-
-volumes:
-  mongodb_data:
-```
-
-
-### 🔧 高级配置
-
-**MongoDB 连接优化**
-```bash
-# 连接池和超时配置
-export MONGODB_URI="mongodb://localhost:27017?maxPoolSize=10&serverSelectionTimeoutMS=5000"
-
-# 副本集配置
-export MONGODB_URI="mongodb://host1:27017,host2:27017,host3:27017/gcli2api?replicaSet=myReplicaSet"
-
-# 读写分离配置
-export MONGODB_URI="mongodb://localhost:27017/gcli2api?readPreference=secondaryPreferred"
 ```
 
 ## 🏗️ 技术架构
