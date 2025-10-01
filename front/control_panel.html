@@ -1566,8 +1566,8 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
 
                             <div class="form-group">
                                 <label for="retry429MaxRetries">429重试次数:</label>
-                                <input type="number" id="retry429MaxRetries" class="config-input" min="1" max="50" />
-                                <small class="config-note">遇到429错误时的最大重试次数</small>
+                                <input type="number" id="retry429MaxRetries" class="config-input" min="0" max="50" />
+                                <small class="config-note">遇到429错误时的最大重试次数（0 表示仅尝试一次）</small>
                             </div>
 
                             <div class="form-group">
