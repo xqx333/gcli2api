@@ -317,7 +317,7 @@ class CredentialManager:
         log.info(f"Rotated to credential index {self._current_credential_index}")
     
     async def force_rotate_credential(self):
-        """强制轮换到下一个凭证（用于429错误处理）"""
+        """强制轮换到下一个凭证"""
         async with self._operation_lock:
             if len(self._credential_files) <= 1:
                 log.warning("Only one credential available, cannot rotate")
