@@ -1105,9 +1105,9 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
 
                             <div class="form-group">
                                 <label for="retry429MaxRetries">429重试次数:</label>
-                                <input type="number" id="retry429MaxRetries" min="1" max="50" />
+                                <input type="number" id="retry429MaxRetries" min="0" max="50" />
                                 <small
-                                    style="display: block; color: #666; font-size: 12px; margin-top: 5px;">遇到429错误时的最大重试次数</small>
+                                    style="display: block; color: #666; font-size: 12px; margin-top: 5px;">遇到429错误时的最大重试次数（0 表示仅尝试一次）</small>
                             </div>
 
                             <div class="form-group">
@@ -3060,8 +3060,8 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
 
             // 429重试配置
             setCheckboxValue('retry429Enabled', config.retry_429_enabled);
-            setFieldValue('retry429MaxRetries', config.retry_429_max_retries);
-            setFieldValue('retry429Interval', config.retry_429_interval);
+            setFieldValue('retry429MaxRetries', getConfigValueWithFallback(config.retry_429_max_retries, 0));
+            setFieldValue('retry429Interval', getConfigValueWithFallback(config.retry_429_interval, 1));
 
 
             // 兼容性配置
@@ -3072,6 +3072,10 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
 
             // 标记环境变量锁定的字段
             markEnvLockedFields();
+        }
+
+        function getConfigValueWithFallback(value, fallback) {
+            return (value === undefined || value === null) ? fallback : value;
         }
 
         // 设置字段值的辅助函数
@@ -3123,6 +3127,18 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
 
         // 从表单收集配置数据
         function collectConfigFromForm() {
+            const retry429MaxRetriesInput = document.getElementById('retry429MaxRetries').value.trim();
+            let retry429MaxRetries = parseInt(retry429MaxRetriesInput, 10);
+            if (Number.isNaN(retry429MaxRetries)) {
+                retry429MaxRetries = getConfigValueWithFallback(currentConfig.retry_429_max_retries, 0);
+            }
+
+            const retry429IntervalInput = document.getElementById('retry429Interval').value.trim();
+            let retry429Interval = parseFloat(retry429IntervalInput);
+            if (Number.isNaN(retry429Interval)) {
+                retry429Interval = getConfigValueWithFallback(currentConfig.retry_429_interval, 1);
+            }
+
             const config = {
                 host: document.getElementById('host').value || null,
                 port: parseInt(document.getElementById('port').value) || null,
@@ -3146,8 +3162,8 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                 calls_per_rotation: parseInt(document.getElementById('callsPerRotation').value) || null,
 
                 retry_429_enabled: document.getElementById('retry429Enabled').checked,
-                retry_429_max_retries: parseInt(document.getElementById('retry429MaxRetries').value) || null,
-                retry_429_interval: parseFloat(document.getElementById('retry429Interval').value) || null,
+                retry_429_max_retries: retry429MaxRetries,
+                retry_429_interval: retry429Interval,
 
 
                 compatibility_mode_enabled: document.getElementById('compatibilityModeEnabled').checked,
