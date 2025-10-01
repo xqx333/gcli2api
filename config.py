@@ -489,4 +489,4 @@ async def get_service_usage_api_url() -> str:
     Default: https://serviceusage.googleapis.com
     """
     return str(await get_config_value("service_usage_api_url", "https://serviceusage.googleapis.com", "SERVICE_USAGE_API_URL"))
-    return bool(mongodb_uri and mongodb_uri.strip())
+
