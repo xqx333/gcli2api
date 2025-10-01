@@ -77,40 +77,41 @@ async def _should_auto_ban(status_code: int, response_content: str) -> tuple[boo
     if not await get_auto_ban_enabled():
         return False, None
 
-    codes = await get_auto_ban_error_codes()
-    code_matched = status_code in codes if codes else False
+     # 并发获取，降低一次网络/IO 往返
+    codes, keywords_map = await asyncio.gather(
+        get_auto_ban_error_codes(),
+        get_auto_ban_keywords(),
+    )
 
-    keywords_map = await get_auto_ban_keywords()
-    keywords_to_check: list[str] = []
-    require_keyword_match = False
-
-    if isinstance(keywords_map, dict) and keywords_map:
-        str_code = str(status_code)
-        if str_code in keywords_map and keywords_map[str_code]:
-            keywords_to_check.extend(keywords_map[str_code])
-            require_keyword_match = True
-        elif "*" in keywords_map and keywords_map["*"]:
-            keywords_to_check.extend(keywords_map["*"])
-            require_keyword_match = True
-    elif isinstance(keywords_map, list) and keywords_map:
-        keywords_to_check.extend([kw for kw in keywords_map if kw])
-        require_keyword_match = True
-
-    if require_keyword_match:
-        if not response_content or not keywords_to_check:
-            return False, None
-        normalized_content = response_content.lower()
-        for keyword in keywords_to_check:
-            cleaned = keyword.strip()
-            if cleaned and cleaned.lower() in normalized_content:
-                if code_matched:
-                    return True, f"keyword '{cleaned}'"
-                # 提供关键字但未匹配状态码时不触发
-                return False, None
+    # 若配置了 codes 且当前 status_code 不在其中，提前返回
+    if codes and status_code not in codes:
         return False, None
 
-    if code_matched:
+
+    # 收集与本 status_code 生效的关键字（或通配符 *），或列表形式
+    keywords_to_check: list[str] = []
+    if isinstance(keywords_map, dict) and keywords_map:
+        kw = keywords_map.get(str(status_code)) or keywords_map.get("*") or []
+        keywords_to_check.extend([k for k in kw if k])
+    elif isinstance(keywords_map, list) and keywords_map:
+        keywords_to_check.extend([k for k in keywords_map if k])
+
+    # 如果配置了关键字，则“必须命中关键字”才触发
+    if keywords_to_check:
+        if not response_content:
+            return False, None
+        normalized = response_content.lower()
+        # 预处理关键字，strip + lower
+        for raw in keywords_to_check:
+            kw = raw.strip().lower()
+            if kw and kw in normalized:
+                return True, f"keyword '{kw}'"
+        return False, None
+
+    # 未配置关键字 => 仅凭状态码触发（若 codes 为空，表示不启用状态码触发）
+    if codes:
         return True, f"status {status_code}"
+
     return False, None
 
 
@@ -174,7 +175,13 @@ async def _prepare_request_headers_and_payload(payload: dict, credential_data: d
     
     return headers, final_payload
 
-async def send_gemini_request(payload: dict, is_streaming: bool = False, credential_manager: CredentialManager = None) -> Response:
+async def send_gemini_request(
+    payload: dict, 
+    is_streaming: bool = False, 
+    credential_manager: CredentialManager = None,
+    credential_file: str = None,
+    credential_data: dict = None
+) -> Response:
     """
     Send a request to Google's Gemini API.
     
@@ -182,6 +189,8 @@ async def send_gemini_request(payload: dict, is_streaming: bool = False, credent
         payload: The request payload in Gemini format
         is_streaming: Whether this is a streaming request
         credential_manager: CredentialManager instance
+        credential_file: The credential filename (should be provided by caller)
+        credential_data: The credential data dict (should be provided by caller)
         
     Returns:
         FastAPI Response object
@@ -197,17 +206,25 @@ async def send_gemini_request(payload: dict, is_streaming: bool = False, credent
     if is_streaming:
         target_url += "?alt=sse"
 
-    # 确保有credential_manager
+    # 确保有credential_manager和凭证数据
     if not credential_manager:
         return _create_error_response("Credential manager not provided", 500)
     
-    # 获取当前凭证
+    # 优先使用传入的凭证，如果没有则获取新的
+    if not credential_file or not credential_data:
+        try:
+            credential_result = await credential_manager.get_valid_credential()
+            if not credential_result:
+                return _create_error_response("No valid credentials available", 500)
+            
+            credential_file, credential_data = credential_result
+        except Exception as e:
+            return _create_error_response(str(e), 500)
+    
+    current_file = credential_file
+    
+    # 准备请求头和payload
     try:
-        credential_result = await credential_manager.get_valid_credential()
-        if not credential_result:
-            return _create_error_response("No valid credentials available", 500)
-        
-        current_file, credential_data = credential_result
         headers, final_payload = await _prepare_request_headers_and_payload(payload, credential_data)
     except Exception as e:
         return _create_error_response(str(e), 500)

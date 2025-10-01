@@ -38,7 +38,7 @@ class CredentialManager:
         
         # 并发控制
         self._state_lock = asyncio.Lock()
-        self._operation_lock = asyncio.Lock()
+        self._operation_lock = asyncio.Lock()  # 保护所有凭证获取和轮换操作
         
         # 工作线程控制
         self._shutdown_event = asyncio.Event()
@@ -246,7 +246,7 @@ class CredentialManager:
             return None
     
     async def get_valid_credential(self) -> Optional[Tuple[str, Dict[str, Any]]]:
-        """获取有效的凭证，自动处理轮换和失效凭证切换"""
+        """获取有效的凭证，自动处理轮换和失效凭证切换，并自动增加调用计数"""
         async with self._operation_lock:
             if not self._credential_files:
                 await self._discover_credentials()
@@ -265,6 +265,8 @@ class CredentialManager:
                     # 加载当前凭证
                     result = await self._load_current_credential()
                     if result:
+                        # 成功获取凭证，自动增加调用计数
+                        self.increment_call_count()
                         return result
                     
                     # 当前凭证加载失败，标记为失效并切换到下一个

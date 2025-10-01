@@ -138,14 +138,13 @@ async def generate_content(
     from src.credential_manager import get_credential_manager
     cred_mgr = await get_credential_manager()
     
-    # 获取有效凭证
+    # 获取有效凭证（内部会自动增加调用计数）
     credential_result = await cred_mgr.get_valid_credential()
     if not credential_result:
         log.error("当前无可用凭证，请去控制台获取")
         raise HTTPException(status_code=500, detail="当前无可用凭证，请去控制台获取")
     
-    # 增加调用计数
-    cred_mgr.increment_call_count()
+    credential_file, credential_data = credential_result
     
     # 构建Google API payload
     try:
@@ -154,8 +153,8 @@ async def generate_content(
         log.error(f"Gemini payload build failed: {e}")
         raise HTTPException(status_code=500, detail="Request processing failed")
     
-    # 发送请求（429重试已在google_api_client中处理）
-    response = await send_gemini_request(api_payload, False, cred_mgr)
+    # 发送请求，直接传递凭证数据（429重试已在google_api_client中处理）
+    response = await send_gemini_request(api_payload, False, cred_mgr, credential_file, credential_data)
     
     return response
 
@@ -199,14 +198,13 @@ async def stream_generate_content(
     from src.credential_manager import get_credential_manager
     cred_mgr = await get_credential_manager()
     
-    # 获取有效凭证
+    # 获取有效凭证（内部会自动增加调用计数）
     credential_result = await cred_mgr.get_valid_credential()
     if not credential_result:
         log.error("当前无可用凭证，请去控制台获取")
         raise HTTPException(status_code=500, detail="当前无可用凭证，请去控制台获取")
     
-    # 增加调用计数
-    cred_mgr.increment_call_count()
+    credential_file, credential_data = credential_result
     
     # 构建Google API payload
     try:
@@ -216,8 +214,8 @@ async def stream_generate_content(
         raise HTTPException(status_code=500, detail="Request processing failed")
     
 
-    # 常规流式请求（429重试已在google_api_client中处理）
-    response = await send_gemini_request(api_payload, True, cred_mgr)
+    # 直接传递凭证数据给send_gemini_request（429重试已在google_api_client中处理）
+    response = await send_gemini_request(api_payload, True, cred_mgr, credential_file, credential_data)
     
     # 直接返回流式响应
     return response
