@@ -116,33 +116,29 @@ async def _should_auto_ban(status_code: int, response_content: str) -> tuple[boo
 
 
 async def _handle_api_error(credential_manager: CredentialManager, status_code: int, response_content: str = "", current_file: str = None):
-    """Handle API errors by rotating or disabling credentials when needed."""
-    auto_ban_triggered = False
-    trigger_reason: Optional[str] = None
+    """
+    Handle API errors by checking auto-ban rules and disabling credentials if needed.
+    Note: 429 retry logic is handled separately in the request functions.
+    """
+    if not credential_manager:
+        return
+    
+    auto_ban_triggered, trigger_reason = await _should_auto_ban(status_code, response_content)
 
-    if credential_manager:
-        auto_ban_triggered, trigger_reason = await _should_auto_ban(status_code, response_content)
-
-    if auto_ban_triggered and credential_manager:
+    if auto_ban_triggered:
         if trigger_reason:
             if response_content:
                 log.error("Google API returned %s - auto ban triggered (%s). Response details: %s" % (status_code, trigger_reason, response_content[:500]))
             else:
                 log.warning("Google API returned %s - auto ban triggered (%s)" % (status_code, trigger_reason))
+        
+        # 尝试禁用当前凭证，如果失败则强制轮换
         if current_file:
             disabled_success = await credential_manager.set_cred_disabled(current_file, True)
             if not disabled_success:
                 await credential_manager.force_rotate_credential()
         else:
             await credential_manager.force_rotate_credential()
-        return
-
-    if status_code == 429 and credential_manager:
-        if response_content:
-            log.error(f"Google API returned status 429 - quota exhausted. Response details: {response_content[:500]}")
-        else:
-            log.error("Google API returned status 429 - quota exhausted, switching credentials")
-        await credential_manager.force_rotate_credential()
 
 
 
@@ -174,6 +170,30 @@ async def _prepare_request_headers_and_payload(payload: dict, credential_data: d
     }
     
     return headers, final_payload
+
+
+async def _handle_response_error(
+    status_code: int,
+    response_content: str,
+    credential_manager: CredentialManager,
+    current_file: str,
+    is_streaming: bool = False
+) -> None:
+    """统一处理API响应错误（包括429和其他错误）"""
+    # 记录详细错误信息
+    stream_type = "STREAMING" if is_streaming else "NON-STREAMING"
+    if response_content:
+        log.error(f"Google API returned status {status_code} ({stream_type}). Response details: {response_content[:500]}")
+    else:
+        log.error(f"Google API returned status {status_code} ({stream_type})")
+    
+    # 记录API调用失败
+    if credential_manager and current_file:
+        error_message = _extract_error_message(status_code, response_content)
+        await credential_manager.record_api_call_result(current_file, False, status_code, error_message)
+    
+    # 统一调用错误处理（包括429的自动禁用）
+    await _handle_api_error(credential_manager, status_code, response_content, current_file)
 
 async def send_gemini_request(
     payload: dict, 
@@ -235,160 +255,23 @@ async def send_gemini_request(
     # Debug日志：打印请求体结构
     log.debug(f"Final request payload structure: {json.dumps(final_payload, ensure_ascii=False, indent=2)}")
 
+    # 重试循环
     for attempt in range(max_retries + 1):
         try:
             if is_streaming:
-                # 流式请求处理 - 使用httpx_client模块的统一配置
-                client = await create_streaming_client_with_kwargs()
-                
-                try:
-                    # 使用stream方法但不在async with块中消费数据
-                    stream_ctx = client.stream("POST", target_url, content=final_post_data, headers=headers)
-                    resp = await stream_ctx.__aenter__()
-                    
-                    if resp.status_code == 429:
-                        # 记录429错误并获取响应内容
-                        response_content = ""
-                        try:
-                            content_bytes = await resp.aread()
-                            if isinstance(content_bytes, bytes):
-                                response_content = content_bytes.decode('utf-8', errors='ignore')
-                        except Exception as e:
-                            log.debug(f"[STREAMING] Failed to read 429 response content: {e}")
-                        
-                        # 显示详细的429错误信息
-                        if response_content:
-                            log.error(f"Google API returned status 429 (STREAMING). Response details: {response_content[:500]}")
-                        else:
-                            log.error("Google API returned status 429 (STREAMING) - quota exhausted, no response details available")
-                        
-                        if credential_manager and current_file:
-                            await credential_manager.record_api_call_result(current_file, False, 429, _extract_error_message(429, response_content))
-                        
-                        # 清理资源
-                        try:
-                            await stream_ctx.__aexit__(None, None, None)
-                        except:
-                            pass
-                        await client.aclose()
-                        
-                        # 如果重试可用且未达到最大次数，进行重试
-                        if retry_429_enabled and attempt < max_retries:
-                            log.warning(f"[RETRY] 429 error encountered, retrying ({attempt + 1}/{max_retries})")
-                            if credential_manager:
-                                # 429错误时强制轮换凭证，不增加调用计数
-                                await credential_manager.force_rotate_credential()
-                                # 重新获取凭证和headers（凭证可能已轮换）
-                                new_credential_result = await credential_manager.get_valid_credential()
-                                if new_credential_result:
-                                    current_file, credential_data = new_credential_result
-                                    headers, updated_payload = await _prepare_request_headers_and_payload(payload, credential_data)
-                                    final_post_data = json.dumps(updated_payload)
-                            await asyncio.sleep(retry_interval)
-                            continue  # 跳出内层处理，继续外层循环重试
-                        else:
-                            # 返回429错误流
-                            async def error_stream():
-                                error_response = {
-                                    "error": {
-                                        "message": "429 rate limit exceeded, max retries reached",
-                                        "type": "api_error",
-                                        "code": 429
-                                    }
-                                }
-                                yield f"data: {json.dumps(error_response)}\n\n"
-                            return StreamingResponse(error_stream(), media_type="text/event-stream", status_code=429)
-                    elif resp.status_code != 200:
-                        # 处理其他非200状态码的错误
-                        response_content = ""
-                        try:
-                            content_bytes = await resp.aread()
-                            if isinstance(content_bytes, bytes):
-                                response_content = content_bytes.decode('utf-8', errors='ignore')
-                        except Exception as e:
-                            log.debug(f"[STREAMING] Failed to read error response content: {e}")
-                        
-                        # 显示详细的错误信息
-                        if response_content:
-                            log.error(f"Google API returned status {resp.status_code} (STREAMING). Response details: {response_content[:500]}")
-                        else:
-                            log.error(f"Google API returned status {resp.status_code} (STREAMING) - no response details available")
-                        
-                        # 记录API调用错误
-                        if credential_manager and current_file:
-                            error_message = _extract_error_message(resp.status_code, response_content)
-                            await credential_manager.record_api_call_result(current_file, False, resp.status_code, error_message)
-                        
-                        # 清理资源
-                        try:
-                            await stream_ctx.__aexit__(None, None, None)
-                        except:
-                            pass
-                        await client.aclose()
-                        
-                        # 处理凭证轮换
-                        await _handle_api_error(credential_manager, resp.status_code, response_content, current_file)
-                        
-                        # 返回错误流
-                        async def error_stream():
-                            error_response = {
-                                "error": {
-                                    "message": f"API error: {resp.status_code}",
-                                    "type": "api_error", 
-                                    "code": resp.status_code
-                                }
-                            }
-                            yield f"data: {json.dumps(error_response)}\n\n"
-                        return StreamingResponse(error_stream(), media_type="text/event-stream", status_code=resp.status_code)
-                    else:
-                        # 成功响应，传递所有资源给流式处理函数管理
-                        return _handle_streaming_response_managed(resp, stream_ctx, client, credential_manager, payload.get("model", ""), current_file)
-                        
-                except Exception as e:
-                    # 清理资源
-                    try:
-                        await client.aclose()
-                    except:
-                        pass
-                    raise e
-
+                return await _send_streaming_request(
+                    target_url, final_post_data, headers, 
+                    credential_manager, current_file, payload.get("model", ""),
+                    retry_429_enabled, attempt, max_retries, retry_interval,
+                    payload, credential_data
+                )
             else:
-                # 非流式请求处理 - 使用httpx_client模块
-                async with http_client.get_client(timeout=None) as client:
-                    resp = await client.post(
-                        target_url, content=final_post_data, headers=headers
-                    )
-                    
-                    if resp.status_code == 429:
-                        # 记录429错误
-                        response_content = ''
-                        try:
-                            response_content = resp.text or ''
-                        except Exception:
-                            response_content = ''
-                        if credential_manager and current_file:
-                            await credential_manager.record_api_call_result(current_file, False, 429, _extract_error_message(429, response_content))
-                        
-                        # 如果重试可用且未达到最大次数，继续重试
-                        if retry_429_enabled and attempt < max_retries:
-                            log.warning(f"[RETRY] 429 error encountered, retrying ({attempt + 1}/{max_retries})")
-                            if credential_manager:
-                                # 429错误时强制轮换凭证，不增加调用计数
-                                await credential_manager.force_rotate_credential()
-                                # 重新获取凭证和headers（凭证可能已轮换）
-                                new_credential_result = await credential_manager.get_valid_credential()
-                                if new_credential_result:
-                                    current_file, credential_data = new_credential_result
-                                    headers, updated_payload = await _prepare_request_headers_and_payload(payload, credential_data)
-                                    final_post_data = json.dumps(updated_payload)
-                            await asyncio.sleep(retry_interval)
-                            continue
-                        else:
-                            log.error(f"[RETRY] Max retries exceeded for 429 error")
-                            return _create_error_response("429 rate limit exceeded, max retries reached", 429)
-                    else:
-                        # 非429错误或成功响应，正常处理
-                        return await _handle_non_streaming_response(resp, credential_manager, payload.get("model", ""), current_file)
+                return await _send_non_streaming_request(
+                    target_url, final_post_data, headers,
+                    credential_manager, current_file, payload.get("model", ""),
+                    retry_429_enabled, attempt, max_retries, retry_interval,
+                    payload, credential_data
+                )
                     
         except Exception as e:
             if attempt < max_retries:
@@ -403,70 +286,143 @@ async def send_gemini_request(
     return _create_error_response("Max retries exceeded", 429)
 
 
-def _handle_streaming_response_managed(resp, stream_ctx, client, credential_manager: CredentialManager = None, model_name: str = "", current_file: str = None) -> StreamingResponse:
-    """Handle streaming response with complete resource lifecycle management."""
+async def _send_streaming_request(
+    target_url: str, 
+    final_post_data: str, 
+    headers: dict,
+    credential_manager: CredentialManager,
+    current_file: str,
+    model_name: str,
+    retry_429_enabled: bool,
+    attempt: int,
+    max_retries: int,
+    retry_interval: float,
+    original_payload: dict,
+    credential_data: dict
+) -> Response:
+    """发送流式请求的内部函数"""
+    client = await create_streaming_client_with_kwargs()
     
-    # 检查HTTP错误
-    if resp.status_code != 200:
-        # 立即清理资源并返回错误
-        async def cleanup_and_error():
-            try:
-                await stream_ctx.__aexit__(None, None, None)
-            except:
-                pass
-            try:
-                await client.aclose()
-            except:
-                pass
-            
-            # 获取响应内容用于详细错误显示
+    try:
+        stream_ctx = client.stream("POST", target_url, content=final_post_data, headers=headers)
+        resp = await stream_ctx.__aenter__()
+        
+        # 检查响应状态码
+        if resp.status_code != 200:
+            # 读取错误响应内容
             response_content = ""
             try:
                 content_bytes = await resp.aread()
                 if isinstance(content_bytes, bytes):
                     response_content = content_bytes.decode('utf-8', errors='ignore')
             except Exception as e:
-                log.debug(f"[STREAMING] Failed to read response content for error analysis: {e}")
-                response_content = ""
+                log.debug(f"Failed to read error response content: {e}")
             
-            # 显示详细错误信息
-            if resp.status_code == 429:
-                if response_content:
-                    log.error(f"Google API returned status 429 (STREAMING). Response details: {response_content[:500]}")
-                else:
-                    log.error(f"Google API returned status 429 (STREAMING)")
-            else:
-                if response_content:
-                    log.error(f"Google API returned status {resp.status_code} (STREAMING). Response details: {response_content[:500]}")
-                else:
-                    log.error(f"Google API returned status {resp.status_code} (STREAMING)")
+            # 清理资源
+            try:
+                await stream_ctx.__aexit__(None, None, None)
+            except:
+                pass
+            await client.aclose()
             
-            # 记录API调用错误
-            if credential_manager and current_file:
-                error_message = _extract_error_message(resp.status_code, response_content)
-                await credential_manager.record_api_call_result(current_file, False, resp.status_code, error_message)
+            # 统一处理错误（包括429）
+            await _handle_response_error(resp.status_code, response_content, credential_manager, current_file, is_streaming=True)
             
-            await _handle_api_error(credential_manager, resp.status_code, response_content, current_file)
+            # 如果是429且允许重试
+            if resp.status_code == 429 and retry_429_enabled and attempt < max_retries:
+                log.warning(f"[RETRY] 429 error encountered, retrying ({attempt + 1}/{max_retries})")
+                if credential_manager:
+                    # 重新获取凭证
+                    new_credential_result = await credential_manager.get_valid_credential()
+                    if new_credential_result:
+                        new_file, new_credential_data = new_credential_result
+                        new_headers, updated_payload = await _prepare_request_headers_and_payload(original_payload, new_credential_data)
+                        new_post_data = json.dumps(updated_payload)
+                        await asyncio.sleep(retry_interval)
+                        # 递归重试（通过抛出异常让外层循环处理）
+                        raise Exception("429 retry needed")
             
-            error_response = {
-                "error": {
-                    "message": f"API error: {resp.status_code}",
-                    "type": "api_error",
-                    "code": resp.status_code
+            # 返回错误流
+            async def error_stream():
+                error_response = {
+                    "error": {
+                        "message": _extract_error_message(resp.status_code, response_content),
+                        "type": "api_error",
+                        "code": resp.status_code
+                    }
                 }
-            }
-            yield f'data: {json.dumps(error_response)}\n\n'.encode('utf-8')
+                yield f"data: {json.dumps(error_response)}\n\n"
+            return StreamingResponse(error_stream(), media_type="text/event-stream", status_code=resp.status_code)
         
-        return StreamingResponse(
-            cleanup_and_error(),
-            media_type="text/event-stream",
-            status_code=resp.status_code
-        )
+        # 成功响应，传递给流式处理函数
+        return _handle_streaming_response_managed(resp, stream_ctx, client, credential_manager, model_name, current_file)
+        
+    except Exception as e:
+        # 清理资源
+        try:
+            await client.aclose()
+        except:
+            pass
+        raise e
+
+
+async def _send_non_streaming_request(
+    target_url: str,
+    final_post_data: str,
+    headers: dict,
+    credential_manager: CredentialManager,
+    current_file: str,
+    model_name: str,
+    retry_429_enabled: bool,
+    attempt: int,
+    max_retries: int,
+    retry_interval: float,
+    original_payload: dict,
+    credential_data: dict
+) -> Response:
+    """发送非流式请求的内部函数"""
+    async with http_client.get_client(timeout=None) as client:
+        resp = await client.post(target_url, content=final_post_data, headers=headers)
+        
+        # 检查响应状态码
+        if resp.status_code != 200:
+            # 读取错误响应内容
+            response_content = ''
+            try:
+                response_content = resp.text or ''
+            except Exception:
+                response_content = ''
+            
+            # 统一处理错误（包括429）
+            await _handle_response_error(resp.status_code, response_content, credential_manager, current_file, is_streaming=False)
+            
+            # 如果是429且允许重试
+            if resp.status_code == 429 and retry_429_enabled and attempt < max_retries:
+                log.warning(f"[RETRY] 429 error encountered, retrying ({attempt + 1}/{max_retries})")
+                if credential_manager:
+                    # 重新获取凭证
+                    new_credential_result = await credential_manager.get_valid_credential()
+                    if new_credential_result:
+                        new_file, new_credential_data = new_credential_result
+                        new_headers, updated_payload = await _prepare_request_headers_and_payload(original_payload, new_credential_data)
+                        new_post_data = json.dumps(updated_payload)
+                        await asyncio.sleep(retry_interval)
+                        # 递归重试（通过抛出异常让外层循环处理）
+                        raise Exception("429 retry needed")
+            
+            return _create_error_response(_extract_error_message(resp.status_code, response_content), resp.status_code)
+        
+        # 成功响应
+        return await _handle_non_streaming_response(resp, credential_manager, model_name, current_file)
+
+
+def _handle_streaming_response_managed(resp, stream_ctx, client, credential_manager: CredentialManager = None, model_name: str = "", current_file: str = None) -> StreamingResponse:
+    """Handle streaming response with complete resource lifecycle management."""
     
     # 正常流式响应处理，确保资源在流结束时被清理
     async def managed_stream_generator():
         success_recorded = False
-        managed_stream_generator._chunk_count = 0  # 初始化chunk计数器
+        chunk_count = 0
         try:
             async for chunk in resp.aiter_lines():
                 if not chunk or not chunk.startswith('data: '):
@@ -492,10 +448,9 @@ def _handle_streaming_response_managed(resp, stream_ctx, client, credential_mana
                         await asyncio.sleep(0)  # 让其他协程有机会运行
                         
                         # 定期释放内存（每100个chunk）
-                        if hasattr(managed_stream_generator, '_chunk_count'):
-                            managed_stream_generator._chunk_count += 1
-                            if managed_stream_generator._chunk_count % 100 == 0:
-                                gc.collect()
+                        chunk_count += 1
+                        if chunk_count % 100 == 0:
+                            gc.collect()
                     else:
                         yield f"data: {json.dumps(obj, separators=(',',':'))}\n\n".encode()
                 except json.JSONDecodeError:
@@ -555,40 +510,9 @@ async def _handle_non_streaming_response(resp, credential_manager: CredentialMan
                 media_type=resp.headers.get("Content-Type")
             )
     else:
-        # 获取响应内容用于详细错误显示
-        response_content = ""
-        try:
-            if hasattr(resp, 'content'):
-                content = resp.content
-                if isinstance(content, bytes):
-                    response_content = content.decode('utf-8', errors='ignore')
-            else:
-                content_bytes = await resp.aread()
-                if isinstance(content_bytes, bytes):
-                    response_content = content_bytes.decode('utf-8', errors='ignore')
-        except Exception as e:
-            log.debug(f"[NON-STREAMING] Failed to read response content for error analysis: {e}")
-            response_content = ""
-        
-        # 显示详细错误信息
-        if resp.status_code == 429:
-            if response_content:
-                log.error(f"Google API returned status 429 (NON-STREAMING). Response details: {response_content[:500]}")
-            else:
-                log.error(f"Google API returned status 429 (NON-STREAMING)")
-        else:
-            if response_content:
-                log.error(f"Google API returned status {resp.status_code} (NON-STREAMING). Response details: {response_content[:500]}")
-            else:
-                log.error(f"Google API returned status {resp.status_code} (NON-STREAMING)")
-        
-        # 记录API调用错误
-        if credential_manager and current_file:
-            error_message = _extract_error_message(resp.status_code, response_content)
-            await credential_manager.record_api_call_result(current_file, False, resp.status_code, error_message)
-        
-        await _handle_api_error(credential_manager, resp.status_code, response_content, current_file)
-        
+        # 错误响应不应该到这里，因为在_send_non_streaming_request中已经处理了
+        # 但为了安全起见，仍然保留这个分支
+        log.error(f"Unexpected error response in _handle_non_streaming_response: {resp.status_code}")
         return _create_error_response(f"API error: {resp.status_code}", resp.status_code)
 
 def build_gemini_payload_from_native(native_request: dict, model_from_path: str) -> dict:
