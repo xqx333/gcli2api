@@ -542,9 +542,7 @@ export MONGODB_URI="mongodb://localhost:27017/gcli2api?readPreference=secondaryP
   - SSL：`rediss://default:password@host:6380`
 - `REDIS_DATABASE`: Redis 数据库索引（0-15，默认：0）
 
-**MongoDB 配置（第二优先级）**
-- `MONGODB_URI`: MongoDB 连接字符串（设置后启用 MongoDB 模式）
-- `MONGODB_DATABASE`: MongoDB 数据库名称（默认：gcli2api）
+<!-- MongoDB 配置已移除 -->
 
 **凭证配置**
 
