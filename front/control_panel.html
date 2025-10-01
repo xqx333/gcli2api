@@ -3251,8 +3251,8 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
 
             // 429重试配置
             document.getElementById('retry429Enabled').checked = Boolean(currentConfig.retry_429_enabled);
-            setConfigField('retry429MaxRetries', currentConfig.retry_429_max_retries || 20);
-            setConfigField('retry429Interval', currentConfig.retry_429_interval || 0.1);
+            setConfigField('retry429MaxRetries', getConfigValueWithFallback(currentConfig.retry_429_max_retries, 0));
+            setConfigField('retry429Interval', getConfigValueWithFallback(currentConfig.retry_429_interval, 1));
 
             // 兼容性配置
             document.getElementById('compatibilityModeEnabled').checked = Boolean(currentConfig.compatibility_mode_enabled);
@@ -3278,6 +3278,10 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
             }
         }
 
+        function getConfigValueWithFallback(value, fallback) {
+            return (value === undefined || value === null) ? fallback : value;
+        }
+
         async function saveConfig() {
             try {
                 // 调试：检查password字段的实际值
@@ -3294,6 +3298,18 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                         showStatus(`自动封禁关键字 JSON 格式错误: ${error.message}`,'error');
                         return;
                     }
+                }
+
+                const retry429MaxRetriesInput = document.getElementById('retry429MaxRetries').value.trim();
+                let retry429MaxRetries = parseInt(retry429MaxRetriesInput, 10);
+                if (Number.isNaN(retry429MaxRetries)) {
+                    retry429MaxRetries = getConfigValueWithFallback(currentConfig.retry_429_max_retries, 0);
+                }
+
+                const retry429IntervalInput = document.getElementById('retry429Interval').value.trim();
+                let retry429Interval = parseFloat(retry429IntervalInput);
+                if (Number.isNaN(retry429Interval)) {
+                    retry429Interval = getConfigValueWithFallback(currentConfig.retry_429_interval, 1);
                 }
 
                 const config = {
@@ -3318,8 +3334,8 @@ docker run -e GCLI_CREDS_1='{"client_id":"..."}' \
                     auto_ban_keywords: autoBanKeywordsConfig,
                     calls_per_rotation: parseInt(document.getElementById('callsPerRotation').value) || 10,
                     retry_429_enabled: document.getElementById('retry429Enabled').checked,
-                    retry_429_max_retries: parseInt(document.getElementById('retry429MaxRetries').value) || 20,
-                    retry_429_interval: parseFloat(document.getElementById('retry429Interval').value) || 0.1,
+                    retry_429_max_retries: retry429MaxRetries,
+                    retry_429_interval: retry429Interval,
                     // 兼容性配置
                     compatibility_mode_enabled: document.getElementById('compatibilityModeEnabled').checked,
                     // 抗截断配置
