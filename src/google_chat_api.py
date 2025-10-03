@@ -491,8 +491,6 @@ async def _handle_non_streaming_response(resp, credential_manager: CredentialMan
             
             raw = await resp.aread()
             google_api_response = raw.decode('utf-8')
-            if google_api_response.startswith('data: '):
-                google_api_response = google_api_response[len('data: '):]
             google_api_response = json.loads(google_api_response)
             log.debug(f"Google API原始响应: {json.dumps(google_api_response, ensure_ascii=False)[:500]}...")
             standard_gemini_response = google_api_response.get("response")
