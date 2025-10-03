@@ -439,15 +439,22 @@ def _handle_streaming_response_managed(resp, stream_ctx, client, credential_mana
                             log.debug(f"Failed to record usage statistics: {e}")
                     success_recorded = True
                 
-                # 原样返回官方响应，chunk已经是字符串格式
-                # aiter_lines()返回的是str，需要编码为bytes + SSE格式的\n\n
-                yield f"{chunk}\n\n".encode()
-                await asyncio.sleep(0)  # 让其他协程有机会运行
-                
-                # 定期释放内存（每100个chunk）
-                chunk_count += 1
-                if chunk_count % 100 == 0:
-                    gc.collect()
+                payload = chunk[len('data: '):]
+                try:
+                    obj = json.loads(payload)
+                    if "response" in obj:
+                        data = obj["response"]
+                        yield f"data: {json.dumps(data, separators=(',',':'))}\n\n".encode()
+                        await asyncio.sleep(0)  # 让其他协程有机会运行
+                        
+                        # 定期释放内存（每100个chunk）
+                        chunk_count += 1
+                        if chunk_count % 100 == 0:
+                            gc.collect()
+                    else:
+                        yield f"data: {json.dumps(obj, separators=(',',':'))}\n\n".encode()
+                except json.JSONDecodeError:
+                    continue
                     
         except Exception as e:
             log.error(f"Streaming error: {e}")
@@ -472,35 +479,39 @@ def _handle_streaming_response_managed(resp, stream_ctx, client, credential_mana
 async def _handle_non_streaming_response(resp, credential_manager: CredentialManager = None, model_name: str = "", current_file: str = None) -> Response:
     """Handle non-streaming response from Google API."""
     if resp.status_code == 200:
-        # 记录成功响应
-        if current_file and credential_manager:
-            await credential_manager.record_api_call_result(current_file, True)
-            # 记录到使用统计
-            try:
-                await record_successful_call(current_file, model_name)
-            except Exception as e:
-                log.debug(f"Failed to record usage statistics: {e}")
-        
-        # 原样返回官方响应,不做修改或检查
-        raw = await resp.aread()
-        if log.level <= 10:  # DEBUG level
-            try:
-                google_api_response = raw.decode('utf-8')
-                if google_api_response.startswith('data: '):
-                    google_api_response = google_api_response[len('data: '):]
-                google_api_response = json.loads(google_api_response)
-                log.debug(f"Google API原始响应: {json.dumps(google_api_response, ensure_ascii=False)[:500]}...")
-            except Exception as e:
-                log.debug(f"Failed to decode response for logging: {e}")
-        
-        return Response(
-            content=raw,
-            status_code=200,
-            media_type=resp.headers.get("Content-Type", "application/json; charset=utf-8")
-        )
+        try:
+            # 记录成功响应
+            if current_file and credential_manager:
+                await credential_manager.record_api_call_result(current_file, True)
+                # 记录到使用统计
+                try:
+                    await record_successful_call(current_file, model_name)
+                except Exception as e:
+                    log.debug(f"Failed to record usage statistics: {e}")
+            
+            raw = await resp.aread()
+            google_api_response = raw.decode('utf-8')
+            if google_api_response.startswith('data: '):
+                google_api_response = google_api_response[len('data: '):]
+            google_api_response = json.loads(google_api_response)
+            log.debug(f"Google API原始响应: {json.dumps(google_api_response, ensure_ascii=False)[:500]}...")
+            standard_gemini_response = google_api_response.get("response")
+            log.debug(f"提取的response字段: {json.dumps(standard_gemini_response, ensure_ascii=False)[:500]}...")
+            return Response(
+                content=json.dumps(standard_gemini_response),
+                status_code=200,
+                media_type="application/json; charset=utf-8"
+            )
+        except Exception as e:
+            log.error(f"Failed to parse Google API response: {str(e)}")
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                media_type=resp.headers.get("Content-Type")
+            )
     else:
-        # 错误响应不应该到这里,因为在_send_non_streaming_request中已经处理了
-        # 但为了安全起见,仍然保留这个分支
+        # 错误响应不应该到这里，因为在_send_non_streaming_request中已经处理了
+        # 但为了安全起见，仍然保留这个分支
         log.error(f"Unexpected error response in _handle_non_streaming_response: {resp.status_code}")
         return _create_error_response(f"API error: {resp.status_code}", resp.status_code)
 
