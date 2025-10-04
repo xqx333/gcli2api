@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Optional, Dict, Any, List
 from urllib.parse import urlparse, parse_qs
 
-from .google_oauth_api import Credentials, Flow, enable_required_apis, get_user_projects, select_default_project
+from .google_oauth_api import Credentials, Flow, enable_required_apis, get_user_projects, select_default_project, create_google_cloud_project
 from .storage_adapter import get_storage_adapter
 from config import get_config_value
 from log import log
@@ -683,10 +683,66 @@ async def asyncio_complete_auth_flow(project_id: Optional[str] = None, user_sess
                         'multiple_credentials': multiple_results
                     }
                 else:
-                    return {
-                        'success': False,
-                        'error': '无法获取您的项目列表，批量认证失败'
-                    }
+                    # 无法获取项目列表，尝试创建一个新项目
+                    log.warning("无法获取项目列表（批量模式），尝试自动创建新项目...")
+                    created_project = await create_google_cloud_project(credentials)
+                    
+                    if created_project:
+                        project_id = created_project.get('projectId')
+                        log.info(f"✅ 成功创建新项目: {project_id}，开始获取凭证...")
+                        
+                        try:
+                            # 为新创建的项目保存凭证
+                            saved_filename = await save_credentials(credentials, project_id)
+                            
+                            # 清理流程
+                            if state in auth_flows:
+                                flow_data_to_clean = auth_flows[state]
+                                try:
+                                    if flow_data_to_clean.get('server'):
+                                        server = flow_data_to_clean['server']
+                                        port = flow_data_to_clean.get('callback_port')
+                                        async_shutdown_server(server, port)
+                                except Exception as e:
+                                    log.debug(f"启动异步关闭服务器时出错: {e}")
+                                del auth_flows[state]
+                            
+                            # 准备返回数据
+                            creds_data = {
+                                "client_id": CLIENT_ID,
+                                "client_secret": CLIENT_SECRET,
+                                "token": credentials.access_token,
+                                "refresh_token": credentials.refresh_token,
+                                "scopes": SCOPES,
+                                "token_uri": "https://oauth2.googleapis.com/token",
+                                "project_id": project_id
+                            }
+                            
+                            if credentials.expires_at:
+                                if credentials.expires_at.tzinfo is None:
+                                    expiry_utc = credentials.expires_at.replace(tzinfo=timezone.utc)
+                                else:
+                                    expiry_utc = credentials.expires_at
+                                creds_data["expiry"] = expiry_utc.isoformat()
+                            
+                            return {
+                                'success': True,
+                                'credentials': creds_data,
+                                'file_path': saved_filename,
+                                'auto_created_project': True,
+                                'project_id': project_id
+                            }
+                        except Exception as e:
+                            log.error(f"为新项目保存凭证失败: {e}")
+                            return {
+                                'success': False,
+                                'error': f'创建了项目但保存凭证失败: {str(e)}'
+                            }
+                    else:
+                        return {
+                            'success': False,
+                            'error': '无法获取您的项目列表且自动创建项目失败，批量认证失败'
+                        }
                         
             # 如果需要自动检测项目ID且没有提供项目ID（单项目模式）
             elif flow_data.get('auto_project_detection', False) and not project_id:
@@ -730,12 +786,21 @@ async def asyncio_complete_auth_flow(project_id: Optional[str] = None, user_sess
                                 ]
                             }
                 else:
-                    # 如果无法获取项目列表，提示手动输入
-                    return {
-                        'success': False,
-                        'error': '无法获取您的项目列表，请手动指定项目ID',
-                        'requires_manual_project_id': True
-                    }
+                    # 如果无法获取项目列表，尝试自动创建项目
+                    log.warning("无法获取项目列表，尝试自动创建新项目...")
+                    created_project = await create_google_cloud_project(credentials)
+                    
+                    if created_project:
+                        project_id = created_project.get('projectId')
+                        flow_data['project_id'] = project_id
+                        log.info(f"✅ 成功创建并使用新项目: {project_id}")
+                    else:
+                        # 创建失败，提示手动输入
+                        return {
+                            'success': False,
+                            'error': '无法获取您的项目列表且自动创建项目失败，请手动指定项目ID或在Google Cloud Console中创建项目',
+                            'requires_manual_project_id': True
+                        }
             elif project_id:
                 # 如果已经有项目ID（手动提供或环境检测），也尝试启用API服务
                 log.info("正在为已提供的项目ID自动启用必需的API服务...")
@@ -930,10 +995,66 @@ async def complete_auth_flow_from_callback_url(callback_url: str, project_id: Op
                             'multiple_credentials': multiple_results
                         }
                     else:
-                        return {
-                            'success': False,
-                            'error': '无法获取您的项目列表，批量认证失败'
-                        }
+                        # 无法获取项目列表，尝试创建一个新项目
+                        log.warning("无法获取项目列表（从回调URL批量模式），尝试自动创建新项目...")
+                        created_project = await create_google_cloud_project(credentials)
+                        
+                        if created_project:
+                            project_id_new = created_project.get('projectId')
+                            log.info(f"✅ 成功创建新项目: {project_id_new}，开始获取凭证...")
+                            
+                            try:
+                                # 为新创建的项目保存凭证
+                                saved_filename = await save_credentials(credentials, project_id_new)
+                                
+                                # 清理流程
+                                if state in auth_flows:
+                                    flow_data_to_clean = auth_flows[state]
+                                    try:
+                                        if flow_data_to_clean.get('server'):
+                                            server = flow_data_to_clean['server']
+                                            port = flow_data_to_clean.get('callback_port')
+                                            async_shutdown_server(server, port)
+                                    except Exception as e:
+                                        log.debug(f"关闭服务器时出错: {e}")
+                                    del auth_flows[state]
+                                
+                                # 准备返回数据
+                                creds_data = {
+                                    "client_id": CLIENT_ID,
+                                    "client_secret": CLIENT_SECRET,
+                                    "token": credentials.access_token,
+                                    "refresh_token": credentials.refresh_token,
+                                    "scopes": SCOPES,
+                                    "token_uri": "https://oauth2.googleapis.com/token",
+                                    "project_id": project_id_new
+                                }
+                                
+                                if credentials.expires_at:
+                                    if credentials.expires_at.tzinfo is None:
+                                        expiry_utc = credentials.expires_at.replace(tzinfo=timezone.utc)
+                                    else:
+                                        expiry_utc = credentials.expires_at
+                                    creds_data["expiry"] = expiry_utc.isoformat()
+                                
+                                return {
+                                    'success': True,
+                                    'credentials': creds_data,
+                                    'file_path': saved_filename,
+                                    'auto_created_project': True,
+                                    'project_id': project_id_new
+                                }
+                            except Exception as e:
+                                log.error(f"为新项目保存凭证失败: {e}")
+                                return {
+                                    'success': False,
+                                    'error': f'创建了项目但保存凭证失败: {str(e)}'
+                                }
+                        else:
+                            return {
+                                'success': False,
+                                'error': '无法获取您的项目列表且自动创建项目失败，批量认证失败'
+                            }
                 except Exception as e:
                     log.error(f"批量获取项目列表失败: {e}")
                     return {
@@ -962,12 +1083,20 @@ async def complete_auth_flow_from_callback_url(callback_url: str, project_id: Op
                             log.info(f"检测到{len(projects)}个项目，自动选择第一个: {detected_project_id}")
                             log.debug(f"其他可用项目: {[p['projectId'] for p in projects[1:]]}")
                     else:
-                        # 没有项目访问权限
-                        return {
-                            'success': False,
-                            'error': '未检测到可访问的项目，请检查权限或手动指定项目ID',
-                            'requires_manual_project_id': True
-                        }
+                        # 没有项目，尝试自动创建
+                        log.warning("未检测到可访问的项目，尝试自动创建新项目...")
+                        created_project = await create_google_cloud_project(credentials)
+                        
+                        if created_project:
+                            detected_project_id = created_project.get('projectId')
+                            auto_detected = True
+                            log.info(f"✅ 成功创建并使用新项目: {detected_project_id}")
+                        else:
+                            return {
+                                'success': False,
+                                'error': '未检测到可访问的项目且自动创建项目失败，请在Google Cloud Console中创建项目或手动指定项目ID',
+                                'requires_manual_project_id': True
+                            }
                 except Exception as e:
                     log.warning(f"自动检测项目ID失败: {e}")
                     return {

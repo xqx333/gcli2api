@@ -541,3 +541,295 @@ async def select_default_project(projects: List[Dict[str, Any]]) -> Optional[str
     project_id = first_project.get('projectId', '')
     log.info(f"选择第一个项目作为默认: {project_id} ({first_project.get('displayName', project_id)})")
     return project_id
+
+
+async def poll_operation_status(
+    credentials: Credentials,
+    operation_name: str,
+    max_attempts: int = 60,
+    poll_interval: float = 3.0
+) -> bool:
+    """
+    轮询长时间运行操作的状态
+    
+    Args:
+        credentials: OAuth凭证
+        operation_name: 操作名称（从创建响应中获取）
+        max_attempts: 最大轮询次数（默认60次，共2分钟）
+        poll_interval: 每次轮询间隔秒数（默认2秒）
+    
+    Returns:
+        True 如果操作成功完成，False 如果失败或超时
+    """
+    try:
+        # 确保凭证有效
+        if credentials.is_expired() and credentials.refresh_token:
+            await credentials.refresh()
+        
+        headers = {
+            "Authorization": f"Bearer {credentials.access_token}",
+            "User-Agent": "geminicli-oauth/1.0",
+        }
+        
+        resource_manager_base_url = await get_resource_manager_api_url()
+        # 操作名称格式: operations/{operation-id}
+        operation_url = f"{resource_manager_base_url.rstrip('/')}/v1/{operation_name}"
+        
+        log.info(f"开始轮询操作状态: {operation_name}")
+        
+        for attempt in range(max_attempts):
+            try:
+                response = await get_async(operation_url, headers=headers)
+                
+                if response.status_code == 200:
+                    operation_data = response.json()
+                    
+                    # 检查操作是否完成
+                    if operation_data.get('done', False):
+                        # 检查是否有错误
+                        if 'error' in operation_data:
+                            error = operation_data['error']
+                            log.error(f"❌ 操作失败: {error.get('message', error)}")
+                            return False
+                        
+                        # 操作成功完成
+                        log.info(f"✅ 操作成功完成 (耗时: {(attempt + 1) * poll_interval:.1f}秒)")
+                        return True
+                    else:
+                        # 操作仍在进行中
+                        if attempt % 5 == 0:  # 每10秒记录一次日志
+                            log.debug(f"操作进行中... (已等待 {(attempt + 1) * poll_interval:.1f}秒)")
+                        
+                        # 等待后再次轮询
+                        await asyncio.sleep(poll_interval)
+                else:
+                    log.warning(f"查询操作状态失败: {response.status_code} - {response.text}")
+                    await asyncio.sleep(poll_interval)
+                    
+            except Exception as e:
+                log.warning(f"轮询操作状态时出错 (尝试 {attempt + 1}/{max_attempts}): {e}")
+                await asyncio.sleep(poll_interval)
+        
+        # 超时
+        log.error(f"⏱️ 操作轮询超时 (超过 {max_attempts * poll_interval:.1f}秒)")
+        return False
+        
+    except Exception as e:
+        log.error(f"❌ 轮询操作状态时发生异常: {e}")
+        return False
+
+
+async def get_project_status(credentials: Credentials, project_id: str) -> Optional[Dict[str, Any]]:
+    """
+    获取项目的当前状态
+    
+    Args:
+        credentials: OAuth凭证
+        project_id: 项目ID
+    
+    Returns:
+        项目信息字典，如果项目不存在或出错则返回None
+    """
+    try:
+        # 确保凭证有效
+        if credentials.is_expired() and credentials.refresh_token:
+            await credentials.refresh()
+        
+        headers = {
+            "Authorization": f"Bearer {credentials.access_token}",
+            "User-Agent": "geminicli-oauth/1.0",
+        }
+        
+        resource_manager_base_url = await get_resource_manager_api_url()
+        project_url = f"{resource_manager_base_url.rstrip('/')}/v1/projects/{project_id}"
+        
+        response = await get_async(project_url, headers=headers)
+        
+        if response.status_code == 200:
+            project_data = response.json()
+            log.debug(f"项目 {project_id} 状态: {project_data.get('lifecycleState')}")
+            return project_data
+        else:
+            log.debug(f"无法获取项目状态: {response.status_code}")
+            return None
+            
+    except Exception as e:
+        log.debug(f"获取项目状态时出错: {e}")
+        return None
+
+
+async def wait_for_project_ready(
+    credentials: Credentials,
+    project_id: str,
+    max_attempts: int = 30,
+    poll_interval: float = 2.0
+) -> bool:
+    """
+    等待项目状态变为 ACTIVE
+    
+    Args:
+        credentials: OAuth凭证
+        project_id: 项目ID
+        max_attempts: 最大轮询次数
+        poll_interval: 轮询间隔秒数
+    
+    Returns:
+        True 如果项目变为 ACTIVE，False 如果超时或失败
+    """
+    log.info(f"等待项目 {project_id} 状态变为 ACTIVE...")
+    
+    for attempt in range(max_attempts):
+        project_data = await get_project_status(credentials, project_id)
+        
+        if project_data:
+            lifecycle_state = project_data.get('lifecycleState')
+            
+            if lifecycle_state == 'ACTIVE':
+                log.info(f"✅ 项目已就绪 (耗时: {(attempt + 1) * poll_interval:.1f}秒)")
+                return True
+            elif lifecycle_state in ['DELETE_REQUESTED', 'DELETE_IN_PROGRESS']:
+                log.error(f"❌ 项目正在被删除")
+                return False
+            else:
+                if attempt % 5 == 0:
+                    log.debug(f"项目状态: {lifecycle_state}, 继续等待...")
+        
+        await asyncio.sleep(poll_interval)
+    
+    log.warning(f"⏱️ 等待项目就绪超时 (超过 {max_attempts * poll_interval:.1f}秒)")
+    return False
+
+
+async def create_google_cloud_project(credentials: Credentials, project_name: str = None) -> Optional[Dict[str, Any]]:
+    """
+    自动创建Google Cloud项目，并等待项目完全就绪
+    
+    Args:
+        credentials: OAuth凭证
+        project_name: 项目名称（可选，默认使用时间戳生成）
+    
+    Returns:
+        创建的项目信息字典，失败返回None
+    """
+    try:
+        # 确保凭证有效
+        if credentials.is_expired() and credentials.refresh_token:
+            await credentials.refresh()
+        
+        # 生成唯一的项目ID
+        import random
+        import string
+        timestamp = int(time.time())
+        random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+        project_id = f"gemini-api-{timestamp}-{random_suffix}"
+        
+        # 如果没有指定项目名称，使用默认名称
+        if not project_name:
+            project_name = f"Gemini API Project {timestamp}"
+        
+        headers = {
+            "Authorization": f"Bearer {credentials.access_token}",
+            "Content-Type": "application/json",
+            "User-Agent": "geminicli-oauth/1.0",
+        }
+        
+        # 创建项目的请求体
+        project_data = {
+            "projectId": project_id,
+            "name": project_name,
+            "labels": {
+                "created-by": "gcli2api",
+                "auto-created": "true"
+            }
+        }
+        
+        # 调用Resource Manager API创建项目
+        resource_manager_base_url = await get_resource_manager_api_url()
+        create_url = f"{resource_manager_base_url.rstrip('/')}/v1/projects"
+        
+        log.info(f"正在创建Google Cloud项目: {project_id}")
+        log.info(f"项目名称: {project_name}")
+        log.info(f"API调用: POST {create_url}")
+        
+        response = await post_async(create_url, headers=headers, json=project_data)
+        
+        log.info(f"创建项目API响应状态码: {response.status_code}")
+        
+        if response.status_code in [200, 201]:
+            created_project = response.json()
+            log.info(f"✅ 项目创建请求已提交: {project_id}")
+            
+            # 检查响应中是否包含操作信息（长时间运行操作）
+            if 'name' in created_project and created_project['name'].startswith('operations/'):
+                # 这是一个长时间运行的操作
+                operation_name = created_project['name']
+                log.info(f"检测到长时间运行操作: {operation_name}")
+                
+                # 轮询操作状态
+                operation_success = await poll_operation_status(
+                    credentials, 
+                    operation_name,
+                    max_attempts=60,  # 最多3分钟
+                    poll_interval=3.0
+                )
+                
+                if not operation_success:
+                    log.error("❌ 项目创建操作未能成功完成")
+                    return None
+            else:
+                # 同步响应，项目已创建
+                log.info("项目创建请求已同步完成")
+            
+            # 等待项目状态变为 ACTIVE
+            project_ready = await wait_for_project_ready(
+                credentials,
+                project_id,
+                max_attempts=30,  # 最多1分钟
+                poll_interval=2.0
+            )
+            
+            if not project_ready:
+                log.warning("⚠️ 项目创建完成但未能确认其状态为ACTIVE，继续尝试...")
+            
+            # 获取最终的项目信息
+            final_project_data = await get_project_status(credentials, project_id)
+            
+            if final_project_data:
+                log.info(f"项目详情: lifecycleState={final_project_data.get('lifecycleState')}, createTime={final_project_data.get('createTime')}")
+            
+            # 尝试启用必需的API
+            log.info("正在为新项目启用必需的API服务...")
+            await enable_required_apis(credentials, project_id)
+            
+            return {
+                'projectId': project_id,
+                'name': project_name,
+                'displayName': project_name,
+                'lifecycleState': final_project_data.get('lifecycleState', 'ACTIVE') if final_project_data else 'ACTIVE',
+                'createTime': final_project_data.get('createTime') if final_project_data else created_project.get('createTime'),
+                'auto_created': True
+            }
+        else:
+            error_text = response.text
+            log.error(f"❌ 创建项目失败: {response.status_code} - {error_text}")
+            
+            # 解析错误信息
+            try:
+                error_data = response.json()
+                error_message = error_data.get('error', {}).get('message', error_text)
+                log.error(f"错误详情: {error_message}")
+                
+                # 检查是否是配额限制错误
+                if 'quota' in error_message.lower() or 'limit' in error_message.lower():
+                    log.error("⚠️ 可能已达到项目创建配额限制（通常为12个项目）")
+                    log.error("建议：删除不用的项目或申请增加配额")
+            except:
+                pass
+            
+            return None
+            
+    except Exception as e:
+        log.error(f"❌ 创建Google Cloud项目时发生异常: {e}")
+        import traceback
+        log.error(traceback.format_exc())
+        return None
